@@ -1,0 +1,493 @@
+---
+title: "Question 1"
+author: "Itai Assraf, Adam Uziel and Amir Zehavi"
+date: "6/1/2021"
+output: html_document
+id_Adam: "323817379"
+id_itay: "322601907"
+id_amir: "206655839"
+---
+
+```{r warning=FALSE, message=F}
+library(tidyverse)
+library(rvest)
+library(lubridate)
+library(here)
+library(glue)
+library(countrycode)
+library(dplyr, warn.conflicts = FALSE)
+# Suppress summarise info
+options(dplyr.summarise.inform = FALSE)
+library(splitstackshape)
+library(gridExtra)
+library(data.table)
+
+```
+
+reading the raw wiki tables:
+
+```{r, warning=FALSE, message=F}
+cases_US_left <- read_csv(here::here("data", "Cases_US_final.csv"))
+death_us <- read_csv(here::here("data", "Death_US_final.csv")) 
+
+```
+
+```{r merged_the_data}
+merged_covid_wiki <- cases_US_left %>%
+  left_join(death_us,by=c("State","area","Date")) %>%
+  mutate(num_deaths = replace_na(num_deaths,0))
+
+
+```
+
+```{r civiq_polls,message=FALSE}
+civiqs_polls <- read_csv(here::here("data", "civiqs_poll.csv"))
+civiqs_polls<-civiqs_polls%>%
+  rename(Date=date)
+
+#change the format of the date.
+civiqs_polls$Date<-as.Date(civiqs_polls$Date, format =  "%m/%d/%Y")
+
+
+```
+
+### [Part 1:]{.ul}
+
+#### [**Explore The Covid Concern And Covid Cases 😷**]{.ul}
+
+#### [First Question-Seasons 🌈☀️❄️🍂]{.ul}
+
+We had a lot of questions about Covid-19.
+
+At the beginning of the pandemic, we heard from many researchers and doctors that the virus will most likely disappear when warmer days come.
+
+One of the question was, how the seasons affect on the pandemic? Were the researchers and experts right? Will wee see less covid cases?
+
+At first, we wanted to see the what months came the 10 days when there were the most dead.
+
+```{r which_month_has_days_people_most_died}
+
+#which area has the most countries.
+date_most_died<-merged_covid_wiki%>%
+  group_by(Date)%>%
+  mutate(sum_death=sum(num_deaths))%>%
+  arrange(desc(sum_death))%>%
+  select(area,Date,sum_death)%>%
+  separate(Date, into = c("Year", "Month", "Day"), sep = "-")%>%
+  distinct(Month,sum_death)%>%
+  arrange(desc(sum_death))%>%
+  head(n=10)
+
+date_most_died
+```
+
+[**Explanation**]{.ul}: We can see that from January(mainly) and February were the months when there were days with the most dead.
+
+**Maybe,it could be connected to the seasons** ❔ **☀️/☔ days will affect** ❔
+
+We will check the affect of each season on the proportion between the number of death to number of cases.
+
+```{r season_affect_on_covid}
+
+#dividing the date to 3 parts
+season_cases_death<-merged_covid_wiki %>%
+    separate(Date, into = c("Year", "Month", "Day"), sep = "-")
+
+
+#second-change tp numeric
+season_cases_death$Month<-as.numeric(season_cases_death$Month)
+
+#classify the months to season. 10-12 Fall, 1-3 Winter, 4-6 Spring, 7-9 Summer
+season_cases_death<-season_cases_death %>%
+  mutate(season = ifelse(Month %in% 10:12, "Fall",
+                               ifelse(Month %in% 1:3, "Winter",
+                                      ifelse(Month %in% 4:6, "Spring",
+                                             "Summer"))))
+
+
+#for each season check the sum of deaths
+max_season_death_Cases<-season_cases_death %>%
+  group_by(season) %>%
+  select(season,num_deaths,num_cases)%>%
+  mutate(sum_death=sum(num_deaths)) %>%
+  mutate(sum_cases=sum(num_cases)) %>%
+  distinct(season,sum_death,sum_cases)
+
+#see the proportion.
+proportion_season<-max_season_death_Cases%>%
+  mutate(proportion=sum_death/sum_cases)%>%
+  arrange(desc(proportion))
+
+proportion_season
+
+```
+
+[**Explanation**]{.ul}: We can see that at the cold season there are more deaths and covid cases than the hot seasons. We can infer that the weather affect on covid cases.
+
+But, **what with areas (geographical location.**❔ Winter and summer change in each area. There are warmer/ colder areas.
+
+We will check to each area, the proportion between the number of death to number of cases.
+
+```{r area_affect_on_covid}
+#first part- checking how the area affect on the relation between the no deaths and no of cases.
+
+#calculate the number of deaths for each area
+
+cases_death_each_area<-season_cases_death%>%
+  group_by(area)%>%
+  mutate(sum_death=sum(num_deaths))%>%
+  mutate(sum_cases=sum(num_cases))
+
+
+
+# to check the relation between no. deaths to no. of cases
+proportion_area<-cases_death_each_area%>%
+  mutate(proportion=sum_death/sum_cases)%>%
+  select(area,proportion)
+
+area_g<-ggplot(proportion_area,aes(x=area,y=proportion),color=factor(area))+
+  
+  
+ geom_point(aes(colour = factor(area),size = proportion))+
+              
+  geom_line(group = 'character',color="red")+
+
+  labs(title='The Area Will Affect On The Relation',
+       subtitle='No.Deads Out Of Total No.Cases',
+       x='Area',
+       y='No.Death / No.Cases',
+       color='Area')+
+  
+  scale_color_manual(values = c("green", "blue", "chocolate4", "pink3","cyan"))
+
+area_g
+
+# ggsave("area graph.png", plot = area_g,width=6.32,height = 3.91)
+
+```
+
+[**Explanation**]{.ul}: We can see that in south and north have the highest proportion, and the west the lowest proportion.
+
+In the south we would expect fewer deaths relative to the number of cases, as there are warmer days, and higher temperatures relative to other areas.
+
+One of the reasons is the winter may be very hard in summer is why "statistics are straightening out". **Were the researchers really right?** 😕
+
+We will therefore examine how the season in each area has affected this.
+
+```{r season_in_each_area}
+
+#calculate the number of death,cases for each area and season
+cases_death_each_area_season<-season_cases_death%>%
+  group_by(area,season)%>%
+  mutate(sum_death=sum(num_deaths))%>%
+  mutate(sum_cases=sum(num_cases))
+
+
+#calculate the relation between the num of deaths to num of cases.
+proportion_area_season<-cases_death_each_area_season%>%
+  mutate(proportion=sum_death/sum_cases)
+
+
+graph_season_area<-ggplot(proportion_area_season,aes(area,proportion,fill=factor(season)))+
+
+  geom_bar(stat='identity', position='dodge')+
+
+
+  labs(title='The Season In each Area Will Affect On The Relation',
+       subtitle='Between No.Death to No.Cases',
+       x='Area',
+       y='No.Death / No.Cases',
+       fill='Season')+
+  #correspond the colors to the seasons
+  scale_fill_manual(values = c("chocolate4", "springgreen", "steelblue1", "blue"))
+
+graph_season_area
+
+# ggsave("season_area.png", plot = graph_season_area,width=6.32,height = 3.91)
+```
+
+[**Explanation:**]{.ul} We can infer that at each area, the cold seasons had the highest proportion!
+
+**The doctors were right** about this. ✔️
+
+**THe seasons affect on the proportion between deaths and cases.**
+
+About the south, we can see that the winter there, the hardest winter from all the areas, and the spring one of the most easier, the "statistics are straightening out". ⬆️
+
+#### [**Second Question: Republicans 🔴🇺🇸**]{.ul}
+
+**How the covid affect on the mood of different people with different opinions? Will we see more concern⁉️ When people took the pandemic seriously ⁉️**
+
+To try to answer for those questions, at first, we check how number of cases affect on republicans and democrats.
+
+```{r rep_dem_cases}
+#creating df of join between the cases to civiqs polls.
+
+join_cases_death<-civiqs_polls%>%
+  left_join(merged_covid_wiki,by='Date')%>%
+  rename(Area=area)%>%
+  select(rep,dem,num_cases,Date)%>%
+  group_by(rep,dem,Date)%>%   
+  summarise(sum_cases=sum(num_cases)) #seeing the num of cases for each dem,                                       rep and the date.
+  
+#pivot! one columns with the values rep or dem. and the second column with the values of the mood of each party
+pivot_data<-join_cases_death %>%
+   pivot_longer(cols=c(dem,rep),
+                names_to="rep_or_dem",
+                values_to ="Current_Mood")
+
+#writing the pivot table for using at the next part.
+write_rds(pivot_data, file = here::here("data", "pivot_data.rds"))
+
+#visual the difference or the similarity between the mood at each party
+dem_rep<-ggplot(pivot_data,aes(Current_Mood,sum_cases,color=factor(rep_or_dem)))+
+
+  geom_point(stat='identity')+
+
+
+  labs(title="The Connection Between No.Cases To People's Concern",
+       subtitle='Classify By Democrats And Republicans',
+       x='Mood',
+       y='Number Of Cases',
+       color='rep or dem')+
+  #correspond the colors to the parties
+  scale_color_manual(values = c("red","blue"))+
+  
+    #tide the scale y column, to see the numbers in their normal display
+  scale_y_continuous(name="Number Of Cases", labels = scales::comma)
+
+dem_rep
+
+# ggsave("rep and dem.png", plot = dem_rep,width=6.32,height = 3.91)
+```
+
+[**Explanation:**]{.ul} There is a correlation between no.cases to mood of people. More covid cases, more stress.
+
+But, **When people understand that the pandemic is dangerous?** **Will we see different results about because people's political opinion?**
+
+```{r rep_mood}
+
+#see the average of number of cases before the republicans ans democrats went in stress.
+before_stress<-pivot_data%>%
+  filter(rep_or_dem=='rep' & Current_Mood<=0)%>%
+  summarise(avg_not_stress=mean(sum_cases))
+
+
+#see the average of number of cases when the republicans$democrats went in stress.
+stress<-pivot_data%>%
+  filter(rep_or_dem=='rep' & Current_Mood>0)%>%
+  summarise(avg_stress=mean(sum_cases))
+
+
+#the critical point, that from this point, we see the change between the mood of republicans (negative to positive)
+the_value_in_calm<-pivot_data%>%
+  filter(rep_or_dem=='rep' & Current_Mood==0)%>%
+  select(sum_cases)%>%
+  rename(critical_point=sum_cases)
+
+#creating df from this details
+df_stress<-data.frame(before_stress,stress,the_value_in_calm)
+df_stress
+```
+
+[**Explanation:**]{.ul} We can infer that at beginning, the republicans didn't think that the pandemic is not dangerous. When they saw that there are 3017 covid cases they understood that it is really ❗
+
+In contrary to Democrats, that from the start, they concerned from the covid-19.
+
+Why?
+
+Maybe because the Democrats didn't trust on their president/disappoint from his conduct, and the Republicans believe in the president and trust him.
+
+From this information, we can see that Republicans are more difficult to convince them that the pandemic is indeed dangerous (because they want the current president to continue in office)
+
+**Therefore, we want to check how the mood of republicans changed day by day depending on the corona cases. When they** 😟 ↗️**/**↘️ **?**
+
+```{r mood_day_by_day_dependon_covidcases}
+
+
+#checking that if there is a connection between diff of the mood to the date 
+
+#we create a new column that calculate the different between the mood of rep at current date to his previous.
+concern_change<-civiqs_polls%>%
+  mutate(diff_rep = rep-lag(rep))
+
+diff_previous<-concern_change%>%
+  left_join(merged_covid_wiki,by='Date')%>%
+  select(diff_rep,num_cases,Date)%>%
+  group_by(Date)%>%
+  mutate(sum_cases=sum(num_cases))%>%
+  distinct(diff_rep,sum_cases,Date)%>%
+  na.omit()
+
+
+
+#visual-with geom bar. we will se the different on the diff that will affected by the Date and the number of cases
+
+repp<-ggplot(diff_previous,aes(Date,sum_cases,fill=factor(diff_rep)))+
+
+  geom_bar(stat='identity')+
+
+
+  labs(title="The Connection Between The Concern To Date And No.Cases",
+       x='Date',
+       y='Number Of Cases',
+
+       fill='diff')+
+  #correspond the colors to the diff
+  scale_fill_manual(values = c("red","blue","cyan","black","green","purple","lightpink3","orange"))+
+
+  #tide the scale y column, to see the numbers in their normal display
+      scale_y_continuous(name="Number Of Cases", labels = scales::comma)+
+
+  #tide the x_scale of the dates. We will see the month and the day.
+  scale_x_date(date_labels = "%b/%d")+
+
+#dividing the graphs by the diff
+  facet_wrap(~diff_rep)
+
+repp
+
+#saving the plot.
+#gsave("Date Cases Diff.png", plot = repp,width=6.32,height = 3.91)
+```
+
+[**Explanation:**]{.ul} From this graph, we can see number of conclusions:
+
+1️⃣: At the beginning of the pandemic (2 weeks), when were more covid cases, we see more concern.
+
+2️⃣: After 2 weeks, we see more covid concern, more than the first 2 weeks, but less concern ❗
+
+Why did this happen?
+
+**We think that the answer is the power of habit. People get used quickly to things, even in a time of crisis .**
+
+#### [Third Question-Weekdays: 📅]{.ul}
+
+During the pandemic, many doctors in Israel 🇮🇱 said that need to do a closure at weekends because could be a lot of corona cases, because many people will do trips or to meet their 👪/👦👧 and as a result they could be infected
+
+As a result we want to check another important question, that if will we more covid cases at weekends or at the other days.
+
+```{r weekdays}
+
+#change the day to english
+change_english<-Sys.setlocale("LC_TIME", "C")
+
+#add columns with the day of week
+
+merged_covid_wiki$weekdays<-strftime(merged_covid_wiki$Date,"%A")
+
+#calculate the proportion for each day.
+weekdays_set<-merged_covid_wiki%>%
+  group_by(weekdays)%>%
+  summarise(sum_cases=sum(num_cases))%>%
+  distinct(weekdays,sum_cases)
+
+
+weekends_days<-c("Saturday","Friday","Thursday")
+
+#add colomn weekend or mid-week
+weekdays_set<-weekdays_set%>%
+  mutate(m_w= ifelse(weekdays %in% weekends_days, "weekend","midweek"))
+
+
+days<-ggplot(weekdays_set,aes(weekdays,sum_cases,fill=factor(weekdays)))+
+
+  #x axis the day and y axis the sum_Cases.
+  geom_col()+
+
+
+  labs(title="Will We see More Covid Cases At Weekends?",
+       x='Days',
+       y='Number Of Cases',
+
+       fill='Day')+
+  #correspond the colors to the diff
+  scale_fill_manual(values = c("pink","orange","green","cyan","purple","khaki","lightgray"))+
+  
+  #see the numbers in y axis normal (800,000 and not 8e+6)
+    scale_y_continuous(name="Number Of Cases", labels = scales::comma)+
+
+  #divind for weekend and midweek
+  facet_wrap(~m_w,ncol=1)
+
+days
+
+# ggsave("days.png", plot = days,width=6.32,height = 3.91)
+
+```
+
+[**Explanation:**]{.ul} We can see that at the midweeks there is more covid cases than at the weekends !! This is surprise ❗
+
+**It's in contrary the doctors' opinion.**
+
+But, the doctors can said that because many of meeting at the weekend they infected, and we will discover after ⏲️ (after few days,not immediately).
+
+Because of the results, **we want to see how the concern of people changed in weekends, and how in midweeks.**
+
+If it's on weekend, we think that we will see less concern, because many people go to 🏖️, to family and not go to 📨.
+
+```{r concern_weekend,warning=FALSE, message=F}
+#Add a columns of the days for each date
+civiqs_polls$weekdays<-strftime(civiqs_polls$Date,"%A")
+
+#the days in week
+weekends_days<-c("Saturday","Friday","Thursday")
+
+#the change of the concern at each day
+concern_days<-civiqs_polls%>%
+  mutate(diff_rep = rep-lag(rep))%>%
+  mutate(diff_dem = dem-lag(dem))%>%
+  na.omit()%>%
+  mutate(m_w= ifelse(weekdays %in% weekends_days, "weekend","midweek"))%>%
+  select(diff_rep,diff_dem,m_w)
+
+#republicans change
+rep_change<-ggplot(concern_days,aes(diff_rep,fill=m_w))+
+
+  #x axis the day and y axis the sum_Cases.
+ geom_histogram(position='dodge',alpha=0.7) +
+
+                 stat_count()+
+
+
+  labs(title="Will We see More Concern At Weekends?",
+       subtitle ='Among Republicans',
+       x='Difference In Mood',
+       y='Count',
+       fill='Midweek_Week')+
+    
+      scale_fill_manual(values = c("hotpink","lightblue3"))+
+
+  facet_wrap(~m_w)
+
+dem_change<-ggplot(concern_days,aes(diff_dem,fill=m_w))+
+
+  #x axis the day and y axis the sum_Cases.
+ geom_histogram(position='dodge',alpha=0.7) +
+
+                 stat_count()+
+
+
+  labs(title="Will We see More Concern At Weekends?",
+       subtitle='Among Democrats',
+       x='Difference In Mood',
+       y='Count',
+       fill='Midweek_Week')+
+  
+    scale_fill_manual(values = c("hotpink","lightblue3"))+
+
+  
+  facet_wrap(~m_w)
+
+
+
+g<-grid.arrange(rep_change,dem_change,ncol=1)
+
+# ggsave("concern_weekdays.png", plot = g,width=6.32,height = 3.91)
+```
+
+[**Explanation:**]{.ul} There is and interesting result.
+
+**It can be seen that there are almost no changes between the weekends and the beginning of the week.**
+
+This is quite surprising because we expected to see less concern over the weekends ❗.

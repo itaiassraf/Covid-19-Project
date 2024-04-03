@@ -1,0 +1,193 @@
+---
+title: "Preparing The Data"
+output: html_document
+author: "Amir Zehavi, Adam Uziel and Itay Asraf"
+id_Adam: "323817379"
+id_itay: "322601907"
+id_amir: "206655839"
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Preparing The Data
+This file is the web scraping and preparation of the wiki covid_cases and covid_deaths in order to get a data-sets that are ready to data analysis.
+After this code we started to answer the 3 questions.
+
+```{r}
+library(tidyverse)
+library(rvest)
+library(lubridate)
+library(here)
+library(glue)
+library(countrycode)
+library(dplyr, warn.conflicts = FALSE)
+# Suppress summarise info
+options(dplyr.summarise.inform = FALSE)
+library(splitstackshape)
+library(gridExtra)
+library(data.table)
+
+```
+
+Taking the relevant tables, cases and death from Wikipedia.
+
+```{r}
+#The tables in the html are in class table=wikitable
+Covid19_US<-read_html("https://en.wikipedia.org/wiki/Template:COVID-19_pandemic_data/United_States_medical_cases")
+
+data_COVID19_US<-Covid19_US%>%
+  html_nodes(".wikitable")%>%
+  html_table(fil=TRUE)
+
+#the 2 tables from wikipedia. The first-cases. Second-Died.
+cases_us<-data.frame(data_COVID19_US[1])
+death_cases<-data.frame(data_COVID19_US[2])
+```
+
+Matching The States to their areas, that he located in.
+
+```{r}
+#taking only the areas.
+areas <- cases_us %>% 
+  select(Date:Territories.3) %>%
+  filter(Date == "Date"& West == "West") %>%
+  head(1)
+
+cases_US_left<- cases_us %>%
+  select(Date:Territories.3) 
+colnames(cases_US_left) <- c(cases_US_left[1,])
+
+
+
+#taking the state and the area that each state belong there.
+temp <- tibble(State = names(cases_US_left), area = as.vector(t(areas))) %>%
+  filter(State!="Date")
+
+```
+
+Changing types of columns, and clean the irrelevant information
+We chose to put 0 instead of null values in the both of tables, because we didn't get any information about the the day and we assumed that means no one died/got seek in thr particular date..
+
+**We choose to put at null values the 0 value in the both of tables, because we didn't get any information about the the day and we couldn't know the cases/deaths.**
+
+```{r}
+#Because at the wikipedia tables there are columns, with values that we didnt want. Like:notes,refs,date(every month the date repeated on himself) and the total table
+cases_US_left <- cases_US_left %>%
+  filter(Date!="Date" & Date!="Total" & Date!= "Notes" & Date!= "Refs") %>%
+  
+   #pivot longer because we want in one c olumns to see the states and the another column the number of the cases
+  pivot_longer(AK:VI, names_to = "State", values_to = "num_cases" ) %>%
+  
+  #correspond each state to his area.
+  left_join(temp, by = "State")  %>%
+  
+  #dividing the date, because we want to change the format of this date.
+  separate(Date, into = c("Day", "Month", "Year"), sep = "-") 
+
+#if there are null values we will put 0
+cases_US_left$num_cases<-suppressWarnings(as.integer(cases_US_left$num_cases))
+cases_US_left$num_cases[is.na(cases_US_left$num_cases)] <- 0
+
+#changing the type of the date
+cases_US_left$Day <- as.integer(cases_US_left$Day)
+cases_US_left$Year <- as.integer(cases_US_left$Year)
+cases_US_left$Year <- cases_US_left$Year + 2000 #the year will be 2020,not 20
+
+#changing from 3 letters month to numeric month
+cases_US_left$Month<-match(cases_US_left$Month,month.abb)
+
+#making date as year-month-day.
+cases_US_left<-cases_US_left %>%
+  mutate(Date = make_datetime(Year, Month, Day))
+
+#change the tyope to date.
+cases_US_left$Date <- as.Date(cases_US_left$Date)
+
+#erase the columns of year,month,day of the date
+drop <- c("Year","Month","Day")
+cases_US_left = cases_US_left[,!(names(cases_US_left) %in% drop)]
+
+```
+
+```{r}
+#erase the date column from the table
+death_us<- death_cases %>%
+  select(Date:Territories.3) 
+
+colnames(death_us) <- c(death_us[1,])
+
+
+#taking only the state and the area that the state in
+temp2 <- tibble(State = names(death_us), area = as.vector(t(areas))) %>%
+  filter(State!="Date")
+
+death_us <- death_us %>%
+  
+  #Because at the wikipedia tables there are columns, with values that we didnt want. Like:notes,refs,date(every month the date repeated on himself) and the total table
+  filter(Date!="Date" & Date!="Total" & Date!= "Notes" & Date!= "Refs") %>%
+  
+  #pivot longer because we want in one c olumns to see the states and the another column the number of the cases
+  pivot_longer(AK:VI, names_to = "State", values_to = "num_deaths" ) %>%
+  
+  #correspond each state to his area.
+  left_join(temp2, by = "State")  %>%
+  
+  #dividing the date, because we want to change the format of this date.
+  separate(Date, into = c("Day", "Month", "Year"), sep = "-")
+
+
+#change null values to 0 TRUE
+
+death_us$num_deaths<-suppressWarnings(as.integer(death_us$num_deaths))
+death_us$num_deaths[is.na(death_us$num_deaths)] <- 0
+
+#changing the type of the date
+death_us$Day <- as.integer(death_us$Day)
+death_us$Year <- as.integer(death_us$Year)
+death_us$Year <- death_us$Year + 2000
+
+#changing from 3 letters month to numeric month
+death_us$Month<-match(death_us$Month,month.abb)
+
+#making date as year-month-day.  
+death_us<-death_us %>% 
+  mutate(Date = make_datetime(Year, Month, Day))
+
+#change the type to date
+death_us$Date <- as.Date(death_us$Date)
+
+#erase the columns of year,month,day of the date
+drop <- c("Year","Month","Day")
+death_us = death_us[,!(names(death_us) %in% drop)]
+
+
+
+
+```
+
+Adding the full country names, in addition to their short names.
+
+```{r, message=F, warning=F}
+
+#change the short names of countries in usa to full name.
+library(countrycode)
+url = "https://raw.githubusercontent.com/vincentarelbundock/countrycode/master/data/custom_dictionaries/us_states.csv"
+
+#at this, we have all the full names of usa countries.
+state_dict = read.csv(url, stringsAsFactors=FALSE)
+dea_country<-data.frame(countrycode(death_us$State, 'abbreviation', 'state', custom_dict=state_dict))
+
+#Rename the column, more esthatic
+dea_country<-dea_country%>%
+  rename(full_name_state=countrycode.death_us.State...abbreviation....state...custom_dict...state_dict.)
+
+#putting the full name state in our data frame. More esthatic
+death_us_final<-death_us %>%
+  mutate(full_name = dea_country$full_name_state)
+write_csv(death_us_final, here::here("data", "Death_US_final.csv"))
+write_csv(cases_US_left, here::here("data", "Cases_US_final.csv"))
+
+```

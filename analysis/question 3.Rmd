@@ -1,0 +1,961 @@
+---
+title: "Qyestion 3"
+author: "Adam Uziel, Amir Zehavi and Itay Asraf"
+date: "6/4/2021"
+output: html_document
+id_Adam: "323817379"
+id_itay: "322601907"
+id_amir: "206655839"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Question 3:
+
+### Intro:
+
+-   The meaningful question: how can the changes in US public support (separated by countries) in Donald Trump explain the extent of the damage from covid-19 (that those countries have experienced)?
+
+-   We will look for 2 interesting explorations.
+
+    1.  how can the public support in Trump during elections polls explain covid cases and deaths?
+
+    2.  how can the changes in public support in Trump (per State) between 2016 elections and 2020 elections can explain the damage those states experienced from the virus.
+
+**First, lets import the needed libraries.**
+
+```{r libraries, message=FALSE, warning=FALSE}
+library("tidyverse")
+library(rvest)
+library(lubridate)
+library(here)
+library(glue)
+library(data.table)
+library(readr)
+library(tidymodels)
+```
+
+-   We would start with `deaths_us` and `cases_us` data-sets from question 1.
+
+```{r reading_wiki, message=F, warning=F}
+deaths_us <- read_csv(here::here("data", "Death_US_final.csv"))
+cases_us <- read_csv(here::here("data", "Cases_US_final.csv"))
+deaths_us
+cases_us
+```
+
+```{r show_wiki}
+deaths_us <- deaths_us %>%
+  rename(short_name = State)
+cases_us <- cases_us %>% rename(short_name = State)
+deaths_us
+cases_us
+```
+
+Let's take a look on the variables:
+
+```{r}
+glimpse(deaths_us)
+```
+
+-   Let's find all the relevant states with their *`full_name`* and *`short_name`* values.
+
+```{r countries}
+countries <- deaths_us %>%
+  select(short_name, full_name, area) %>%
+  distinct() %>%
+  mutate(full_name = if_else(short_name=="DC","District of Columbia", full_name )) %>%
+  filter(!is.na(full_name)) 
+countries
+```
+
+-   Merging the tables to one data-set:
+
+```{r merge_wiki_tables, message=F, warning=F}
+merged_covid_wiki <- cases_us %>%
+  left_join(deaths_us) %>%
+  mutate(num_deaths = replace_na(num_deaths,0)) %>%
+  select(short_name, num_cases, Date, num_deaths) %>%
+  left_join(countries) 
+merged_covid_wiki
+```
+
+-   Minimum and Maximum dates.
+
+-   It's relevant for the elections polls data-set.
+
+-   We will use those date in order to filter the dates of the polls.
+
+```{r min_max}
+min_date <- min(merged_covid_wiki$Date)
+max_date<- max(merged_covid_wiki$Date)
+min_date
+max_date
+```
+
+### Exploration 1: data on election polls.
+
+-   I have found a data-set that contains some `elections polls`.
+
+-   We will see some visualizations in order to explore this collected information.
+
+-   And the most important part- We will try to answer the research question based on creating connection between the wiki cases-deaths data-sets and the polls data-set.
+
+```{r election_polls_read, message=FALSE, warning=FALSE}
+elections_polls <- read_csv(here::here("data", "trump_biden_polls.csv")) %>%
+  rename(full_name = state)
+elections_polls
+```
+
+Another look on the variables:
+
+```{r}
+glimpse(elections_polls)
+```
+
+-   Some tidying: making `start_date` & `end_date` variables in the needed format for our analysis.
+
+```{r tidy_dates}
+elections_polls <-  elections_polls %>%
+  separate(start_date, into = c("Month1", "Day1", "Year1"), sep = "/") %>%
+  separate(end_date, into= c("Month2", "Day2", "Year2"), sep = "/")
+elections_polls$Day1 = as.numeric(elections_polls$Day1)
+elections_polls$Month1 = as.numeric(elections_polls$Month1)
+elections_polls$Year1 = as.numeric(elections_polls$Year1)
+elections_polls$Day2 = as.numeric(elections_polls$Day2)
+elections_polls$Month2 = as.numeric(elections_polls$Month2)
+elections_polls$Year2 = as.numeric(elections_polls$Year2)
+
+
+elections_polls <- elections_polls %>%
+  mutate(Year1 = case_when(
+    Year1==20 ~ 2020,
+    Year1==19 ~ 2019,
+    Year1==18 ~2018,
+    T ~ Year1
+  ),
+  Year2 = case_when(
+    Year2==20 ~ 2020,
+    Year2==19 ~ 2019,
+    Year2==18 ~2018,
+    T ~ Year2
+  ))
+elections_polls$start_date = as.Date(with(elections_polls, paste(Year1,Month1,Day1, sep = "-")), "%Y-%m-%d")  
+
+elections_polls$end_date = as.Date(with(elections_polls, paste(Year2,Month2,Day2, sep = "-")), "%Y-%m-%d")  
+
+elections_polls <-elections_polls %>% select(-Month1, -Month2, -Year1, -Year2, -Day1, -Day2)
+elections_polls
+```
+
+-   Changes in some of the States `full_name` values .
+
+```{r change_state_full_names, message=F, warning=FALSE}
+
+elections_polls <- elections_polls %>%
+  filter(!is.na(full_name)) %>%
+  mutate(full_name = case_when(
+    full_name=="Nebraska CD-2" ~ "Nebraska",
+    full_name=="Maine CD-2" ~ "Maine",
+    full_name=="Maine CD-1" ~ "Maine",
+    full_name=="Nebraska CD-1" ~ "Nebraska",
+    T ~ full_name
+  )) %>%
+  left_join(countries) 
+elections_polls  
+
+```
+
+-   Matching the dates here to the dates in the `merged_covid_wiki` data-set.
+
+-   Calculation of the difference between `end_date` and `start_date`
+
+```{r mathing_dates}
+elections_polls <- elections_polls %>% filter(start_date<=max_date & start_date>=min_date & end_date<=max_date & end_date>=min_date) %>%
+  mutate(diff = end_date-start_date,
+         diff = as.numeric(diff))
+elections_polls
+
+```
+
+-   Finding the 10 most popular States in the `elections_polls` data-set.
+
+```{r most_popular_states}
+most_popular_states<- elections_polls %>%
+  count(full_name, sort = T) %>%
+  head(10)
+most_popular_states
+```
+
+### Plot 1
+
+-   Among those States: visualization of Frequency of polls that the candidates won.
+
+```{r Frequency_winners_dodge}
+temp_gg_1<- elections_polls %>%
+  filter(full_name %in% most_popular_states$full_name) %>%
+  mutate(answer = case_when(
+    answer=="Biden" ~ "Biden",
+    answer=="Trump" ~ "Trump",
+    T ~ "Others"
+  ))
+ggplot(data = temp_gg_1,mapping = aes(x = factor(full_name) , fill = answer) ) + 
+  geom_bar(stat = "count", position = "dodge") + 
+  scale_x_discrete(guide = ggplot2::guide_axis(n.dodge = 2), 
+                   labels = function(x) stringr::str_wrap(x, width = 20)) + 
+  scale_fill_manual(values = c("blue", "green", "pink") , 
+                    name = "Winner")+  
+  labs(
+    x = "State",
+    y = "Number of wins",
+    title = "Frequency of Polls that the Candidates Won",
+    subtitle = "Among the 10 most popular states in the elections polls data-set"
+  ) + 
+  theme_minimal()
+#ggsave("Frequency of Polls that the Candidates Won.png")  
+
+```
+
+[**Explanation:**]{.ul}
+
+-   We can see that Trump have won more polls than Biden.
+
+-   Maybe some of the polls occur before Biden selected to the democrat's candidate.
+
+-   There are more polls of Trump's loss than polls of him wining.
+
+### Plot 2
+
+```{r Frequency_winners_fill}
+ggplot(data = temp_gg_1,mapping = aes(x = factor(full_name) , fill = answer) ) + 
+  geom_bar(stat = "count", position = "fill") + 
+  scale_fill_manual(values = c("blue", "green", "pink") , 
+                    name = "Winner")+  
+  labs(
+    x = "State",
+    y = "Proportion of wins",
+    title = "Proportion of Polls that the Candidates Won",
+    subtitle = "Among the 10 most popular states in the elections polls data-set"
+  )+
+  coord_flip() + 
+  theme_minimal()
+#ggsave("Proportion of Polls that the Candidates Won.png")
+  
+
+```
+
+[**Explanation:**]{.ul}
+
+-   Same as the last plot but with proportion instead of Count.
+
+### Plot 3:
+
+-   Selecting the 2 most popular methodologies.
+
+-   Counting the number of votes for each party.
+
+-   Separated by the two methodologies.
+
+```{r Methodologies}
+popular_metho<- elections_polls %>%
+  count(methodology, sort = T) %>%
+  head(2)
+
+temp_gg2 <- elections_polls %>%
+  filter(methodology %in% popular_metho$methodology)
+
+count_occur <- temp_gg2 %>%
+  group_by(candidate_party) %>%
+  mutate(num_parties = n())
+ggplot(data = count_occur, mapping = aes(x =reorder((factor(candidate_party)), num_parties) , fill = methodology)) + 
+  geom_bar(stat = "count", position = "dodge")  + 
+  coord_flip() + 
+  labs(
+    x = "Number of wins",
+    y = "Party",
+    title = "The number of votes for each party.",
+    subtitle = "Seperated by the 2 most popular methodologies."
+  ) + 
+  scale_fill_manual(values = c("pink", "blue"), name  = "Methedology") + 
+  theme_minimal()
+#ggsave("The number of votes for each party.png")
+```
+
+[***Explanation:***]{.ul}
+
+We can see that the results of the polls are nearly the same between the parties.
+
+### Plot 4:
+
+```{r Methodologies_proportion}
+
+ggplot(data = count_occur, mapping = aes(x =reorder((factor(candidate_party)), num_parties) , fill = methodology)) + 
+  geom_bar(stat = "count", position = "fill")  + 
+  coord_flip() + 
+  labs(
+    x = "Propotion",
+    y = "Party", 
+    title = "The proportion of votes for each party.",
+    subtitle = "Seperated by thr 2 most popular methodologies."
+  ) + 
+  scale_fill_manual(values = c("pink", "blue"), name = "Methodology") + 
+  theme_minimal()
+#ggsave("The proportion of votes for each party.png")
+
+```
+
+We can see the same result when we look at the proportions.
+
+### Plot 5:
+
+-   Now, we will begin to use visualizations that will attempt to answer our research question (and not only for data exploration).
+
+-   Let's find the 5 months with the biggest amount of covid deaths and cacses.
+
+```{r bad_months, message=F, warning=F}
+merged_covid_wiki %>%
+    mutate(cases_deaths = num_cases + num_deaths,
+      year= year(Date),
+         month =month(Date)
+         ) %>%
+  group_by(year, month) %>%
+  summarise(sum_cases_deaths = sum(cases_deaths, na.rm = T)) %>%
+  arrange(desc(sum_cases_deaths)) %>%
+  head(5)
+  
+
+```
+
+-   Among these months- we will count the number of Trump's wins against the number of wins of all the other candidates together.
+
+```{r Trump_others}
+temp_gg3<- elections_polls %>%
+  filter(
+    ((year(start_date)==2021 & month(start_date)==3)|(year(start_date)==2020 & (month(start_date) %in% c(8,9,10,7)))) & ((year(end_date)==2021 & month(end_date)==3)|(year(end_date)==2020 & (month(end_date) %in% c(8,9,10,7))))
+  ) %>%
+  mutate( answer = case_when(
+    answer=="Trump" ~"Trump",
+    T ~ "Not Trump"
+  ))
+ggplot(data = temp_gg3, mapping = aes(x = answer, fill = answer)) + 
+  geom_bar(stat = "count") + 
+  theme(legend.position = "none") + 
+  labs(
+    x = NULL,
+    y = "Count"
+  ) + 
+  coord_flip() + 
+  scale_fill_manual(values = c("blue", "red")) + 
+  labs(
+    x = "Number of wins",
+    title = "The number of Trump's wins against the number of wins of the others",
+    subtitle = "Among the months with the biggest cases and deaths amount"
+  
+  ) + 
+  theme_minimal() 
+#ggsave("The number of Trump's wins against the number of wins of the others.png")
+```
+
+[***Explanation:***]{.ul}
+
+-   We can see that on those months Trump has lost in most of the polls.
+
+-   does it mean that the covid cases and deaths in states can be explained by the public support in Trump?
+
+### Creating a new data-set:
+
+For each date among all the dates in `merged_covid_wiki`: I gave a value that represents the proportion of wins of Trumps in all polls that were occurred in that date. The is between the poll's `start_date` and `end_date` .
+
+```{r iterative_algo}
+index<-1
+Date_list <- list()
+State_list <- list()
+Winner_id_list <- list()
+winner_name_list <- list()
+ 
+for(row in 1:nrow(elections_polls)){
+  curr_diff <- elections_polls[[row,"diff"]]
+  curr_start_date <- elections_polls[[row,"start_date"]]
+  Date_list[[index]] <- curr_start_date
+  winner_id <- elections_polls[[row, "candidate_id"]]
+  winner_name <- elections_polls[[row, "answer"]]
+  state <- elections_polls[[row,"full_name"]]
+  Winner_id_list[[index]] <- winner_id
+  winner_name_list[[index]] <- winner_name
+  State_list[[index]] <- state
+  while(curr_diff>0){
+    curr_diff <- curr_diff - 1
+    index <- index + 1
+    curr_start_date <- curr_start_date + 1
+    Date_list[[index]] <- curr_start_date
+    State_list[[index]] <- state
+    winner_name_list[[index]] <- winner_name
+    Winner_id_list[[index]] <- winner_id
+  }
+  index <- index+1
+}
+
+```
+
+-   `new` is a temporary data-set that contain for each `Date` the results of all polls (in some State) the were occurring in this particular `Date`. the `Date` is between the poll's `start_date` and `end_date` values.
+
+```{r polls_per_date}
+Date_vec<-do.call("c", Date_list)
+State_vec <- unlist(State_list)
+winner_id_vec <- unlist(Winner_id_list)
+winner_name_vec <- unlist(winner_name_list)
+
+new <- tibble(Date = Date_vec,
+              full_name = State_vec, 
+              winner_id = winner_id_vec,
+              winner_name = winner_name_vec,
+              )
+new
+```
+
+-   For each date and State: `polls_prop` contains the proportion of Trump's wins in the polls that was occurring in those dates and states.
+
+```{r polls_prop}
+polls_prop <- new %>% 
+  mutate(winner_name = if_else(winner_name=="Trump", "Trump", "Not Trump")) %>%
+  count(Date, full_name, winner_name) %>%
+  group_by(Date, full_name) %>%
+  mutate(p = n/sum(n)) 
+polls_prop
+
+```
+
+### Plot 6:
+
+-   From all the pairs of date and State we would take only those that have 8 or more polls.
+
+-   Then We would calculate the average of all the proportions grouped by each month.
+
+-   We watch the distribution of the average proportions among the months that remained after the filter, separated by each `area`.
+
+```{r plot6, message=F, warning=F}
+temp_gg4 <- polls_prop %>%
+  filter(n>=8) %>%
+  left_join(countries) %>%
+  filter(winner_name == "Trump") %>%
+  mutate(month = month(Date),
+         year = year(Date)) %>%
+  group_by(year,month, area, .groups = "drop") %>%
+  summarise(avg_prop = mean(p, na.rm = T)) 
+
+ggplot(data = temp_gg4 , mapping = aes(x = avg_prop, color = area)) +
+ geom_density() + 
+ facet_wrap(~ area) + 
+ scale_x_continuous(breaks = scales::pretty_breaks(n = 6)) + 
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 6)) + 
+
+  labs(
+    x= "Average proportion",
+    y = "Density",
+    title = "Distribution of the Average Proportions Calculated for each month",
+    subtitle = "Separeted by each area, with facets"
+  )  + 
+  theme_minimal()
+#ggsave("Distribution of the Average Proportions Calculated for each month.png")
+
+```
+
+**Explanation:**
+
+-   We can see moderate increases in the areas: West, South, Northeast. the distribution of Trump's support is those state is nearly uniform.
+
+-   But in the Midwest's countries there are a lot of countries that supported trump more than the average in the US.
+
+### Plot 7:
+
+```{r plot7, message=F, warning=F}
+ggplot(data = temp_gg4 , mapping = aes(x = avg_prop, color = area)) +
+ geom_density() + 
+ scale_y_continuous(breaks = scales::pretty_breaks(n = 6)) + 
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 6)) + 
+  labs(
+        x= "Average proportion",
+    y = "Density",
+    title = "Distribution of the Average Proportions Calculated for each month",
+    subtitle = "Separeted by each area, without facets"
+  ) + 
+  theme_minimal()
+#ggsave("Distribution of the Average Proportions without facets.png")
+  
+
+```
+
+**Explanation:** same plot but without facets. We can see now that in Northeast Trump has more support than the South and West.
+
+-   Merging the `polls_prop` and `merged_covid_wiki` data-set.
+
+-   Calculating the sum of cases and deaths for each record:
+
+```{r join_polls_wiki, message=F, warning=F}
+results_polls_corona <- polls_prop %>%
+  left_join(merged_covid_wiki) %>%
+  filter(!is.na(num_cases)) %>%
+  mutate(cases_deaths = num_deaths + num_cases) 
+results_polls_corona
+```
+
+### Build the first model:
+
+#### Plot 8:
+
+-   We built a linear model as the proportion of Trumps wins in each pair (date, state) is the explanatory variable, and the sum of deaths and cases for this pair of (date, state) represents the response variable.
+
+```{r linear_model, message=FALSE, warning=FALSE}
+ggplot(results_polls_corona %>% filter(winner_name=="Trump"), aes(x = p, y = cases_deaths)) +
+  geom_point() +
+  geom_jitter(alpha = 0.5) + 
+  geom_smooth(method = "lm") + 
+  labs(
+    x = "Proportion",
+    y = "Sum of cases and deaths",
+    title = "How Trump's wins proportion explains the Sum of cases and deaths",
+    subtitle = "For each unique pair of date and state"
+  )
+#ggsave("How Trump's wins proportion explains the Sum of cases and deaths.png")
+  
+
+```
+
+### Plot 9:
+
+Same as the last plot, but here the response variable in log function.
+
+```{r model_log_1, message=F, warning=F}
+
+ggplot(results_polls_corona %>% filter(winner_name=="Trump"), aes(x = p, y = log(num_deaths + num_cases+0.0001))) +
+  geom_point() +
+  geom_jitter() + 
+  geom_smooth(method = "lm")+
+  labs(
+    x = "Proportion",
+    y = "Log on Sum of cases and deaths",
+    title = "How Trump's wins proportion explains the log( Sum of cases and deaths)",
+    subtitle = "For each unique pair of date and state"
+  ) 
+#ggsave("How Trump's wins proportion explains the log( Sum of cases and deaths).png")
+
+```
+
+-   We can see that the Log scale doesn't help to see any new behavior.
+
+-   It's helpful when we have right long tail.
+
+let's see how the Residuals look:
+
+```{r linear_reg_1}
+polls_corona_trump <- results_polls_corona %>% filter(winner_name=="Trump")
+polls_corona_fit <- linear_reg() %>%
+  set_engine("lm") %>%
+  fit(cases_deaths ~p , data = polls_corona_trump)
+polls_corona_fit_aug <- augment(polls_corona_fit$fit)
+
+ggplot(polls_corona_fit_aug, mapping = aes(x = .fitted, y = .resid)) +
+  geom_point(alpha = 0.5) +
+  geom_hline(yintercept = 0, color = "gray", lty = "dashed") +
+  labs(x = "Predicted Death Proportion", y = "Residuals")
+#ggsave("first_model_residuals.png")  
+
+
+```
+
+-   Residuals distributed nearly randomly around 0.
+
+-   With no visible pattern along the x or y axes.
+
+-   the problem is not the model selection.
+
+-   So probably Donald Trump's support in `elections_polls` can't explain corona's cases and deaths.
+
+-   Let's calculate the R squared and pearson correlation:
+
+```{r statistics_model_1}
+R_sq<- glance(polls_corona_fit)$r.squared
+cor <- cor(polls_corona_trump$p, polls_corona_trump$cases_deaths, 
+                    method = "pearson")
+c("R Squared" = R_sq, "Correlation" = cor)
+
+```
+
+Really low values, the model don't explain good the variability and the variables are even not correlated.
+
+## Exploration 2:
+
+-   In this part we will explore data-sets of the elections results in 2016 and 2020.
+
+-   Also we will use a data-set that contains information about the population for each State.
+
+-   We would check if the changes in the public support in Trump between 2016 and 2020 elections (separated for each state) can explain the proportion of cases and deaths for each state .
+
+```{r read_elections, message=FALSE}
+president_state <- read_csv(here::here("data", "president_state.csv"))
+president_country_candidate <- read_csv(here::here("data", "president_county_candidate.csv")) %>%
+  rename(full_name = state)
+elections_2016 <- read_csv(here::here("data", "2016_elections.csv"))
+
+```
+
+-   Let's start with 2020:
+
+-   First - data tidying.
+
+```{r tidy_elections, warning=FALSE, message=F}
+
+president_state <- president_state %>% rename(full_name = state) %>%
+   left_join(countries) %>%
+  mutate(short_name = case_when(
+    full_name=="District of Columbia" ~ "DC",
+    full_name=="United States" ~ "US",
+    T ~ short_name
+  )) 
+president_state
+
+```
+
+-   calculate the proportion of votes to Trump for each state's `short_name`
+
+```{r elections_2020_prop}
+(elections_2020_prop<-president_country_candidate %>%
+  mutate(candidate = if_else(candidate=="Donald Trump", "Trump", "Not Trump")) %>%
+  group_by(full_name, candidate )%>%
+  summarise(state_candidate_votes = sum(total_votes, na.rm = T), .groups = "drop") %>%
+  group_by(full_name) %>%
+  mutate(prop2020 = state_candidate_votes/sum(state_candidate_votes)) %>%
+  left_join(president_state , by= "full_name") %>%
+  ungroup() %>%
+  select(short_name,candidate, prop2020 ) %>%
+  group_by(short_name, candidate))
+  
+  
+
+```
+
+-   same kind of calculation with the 2016 election's data-set:
+
+```{r elections_2016_prop}
+
+elections_2016_prop <- elections_2016 %>%
+  filter(!is.na(`LAST NAME`)) %>%
+  mutate(`LAST NAME` = if_else(`LAST NAME`=="Trump","Trump", "Not Trump")) %>%
+  select(`STATE ABBREVIATION`, `LAST NAME`, `GENERAL %`) 
+elections_2016_prop$`GENERAL %` <- str_replace(elections_2016_prop$`GENERAL %`, '%', '')
+elections_2016_prop$`GENERAL %` <- as.numeric(elections_2016_prop$`GENERAL %`)
+(elections_2016_prop <- elections_2016_prop %>%
+  group_by(`STATE ABBREVIATION`, `LAST NAME`) %>%
+  summarise(prop = sum(`GENERAL %`, na.rm = T), .groups = "drop") %>% 
+  rename(short_name = `STATE ABBREVIATION`,
+         candidate = `LAST NAME`,
+         prop2016 = prop) %>%
+  mutate(prop2016 = prop2016/100) %>%
+  ungroup())
+
+```
+
+-   Combining the data-sets of 2016 and 2020:
+
+```{r combine_elactions, message=FALSE, warning=FALSE}
+(unite_elections <- elections_2020_prop %>%
+  left_join(elections_2016_prop))
+
+```
+
+-   Conversion of the proportions into percentage.
+
+-   Calculation of the difference between the percentage of support in trump between 2016 and 2020 elections.
+
+-   That is a kind of normalization to check if the corona changes the "normal voters behavior" (Probably not only the virus did so...)
+
+```{r percentages}
+unite_elections<- unite_elections %>%
+  mutate(prop2020 = prop2020*100,
+         prop2016 = prop2016*100,
+         change_2016_to_2020 = prop2020-prop2016)
+```
+
+distribution of `change_2016_to_2020` separated to the 4 areas:
+
+```{r votes_areas1, message=FALSE, warning=FALSE}
+ggplot(unite_elections %>%filter(candidate=="Trump") %>% left_join(countries), mapping = aes(x= change_2016_to_2020, color = area)) + 
+  geom_density() + 
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 12)) + 
+  facet_wrap(~ area) + 
+  xlim(-5,7) + 
+  labs(
+    title = "Diffrence between Trump's support precentages from 2016 to 2020",
+    subtitle = "Separated by Areas",
+    y = "Density",
+    x = "Difference (percentages)"
+  ) + 
+  theme_minimal()
+#ggsave("Diffrence between Trump's support precentages from 2016 to 2020.png")
+
+```
+
+**Explanation:** An interesting result is that in South's countries the support percentage in Trump did not really changed. But people from states in the West changed their minds about Trump. Soon we will see if those changes can explain the corona deaths and cases.
+
+-   Tidying data of population (for each State):
+
+```{r reading_population, message=F, warning=F}
+sum_cases_deaths <- merged_covid_wiki %>%
+  group_by(short_name, full_name) %>%
+  summarise(sum_deaths = sum(num_deaths, na.rm = T),
+            sum_cases = sum(num_cases, na.rm = T))
+population <- read_csv(here::here("data", "nst-est2019-01.csv"))
+  
+```
+
+```{r tydingpop, message=FALSE, warning=FALSE }
+population <-population %>%
+  rename(full_name = `table with row headers in column A and column headers in rows 3 through 4. (leading dots indicate sub-parts)`,
+         population = X13) %>%
+  tail(58)
+population$full_name <- str_replace(population$full_name, '.', '')
+population<- population %>%
+  left_join(countries) %>%
+  mutate(short_name = if_else(full_name=="District of Columbia","DC", short_name )) %>%
+  head(51) %>%
+  select(full_name, population)
+population
+```
+
+### Plot 10:
+
+1.  Take the 8 states with the biggest turnout.
+
+2.  Among these state, we presented for each one the percentage of votes, Separated by votes for Trump and votes for other candidates.
+
+```{r turnout_plot, message=F, warning=F}
+big_turnout_countries <- population %>%
+  left_join(president_state) %>%
+  mutate(Turnout = (total_votes/population)*100) %>%
+  arrange(desc(Turnout)) %>%
+  head(8)%>%
+  select(full_name, short_name, Turnout) %>%
+  left_join(unite_elections, by = "short_name") %>%
+  pivot_longer(c("prop2020", "prop2016"), names_to = "elections_year", values_to = "trump_ornot_p") %>%
+  mutate(elections_year = if_else(elections_year=="prop2020", "2020", "2016"))
+ggplot(data = big_turnout_countries, mapping = aes(x = factor(full_name), y = trump_ornot_p, fill = candidate))  + 
+  geom_bar(stat = "identity", position = "dodge") + 
+  facet_wrap(~ factor(elections_year)) + 
+  coord_flip() + 
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 6)) + 
+  scale_fill_manual(values = c("blue", "red")) + 
+  labs(
+    x = "State",
+    y = "Percentage of votes",
+    title = "The votes for Trumps or others Separated by 2016 and 2020",
+    subtitle = "Among the 8 states with the biggest turnout"
+  ) + 
+  theme_minimal()
+#ggsave("The votes for Trump or others Separated by 2016 and 2020.png")
+  
+
+```
+
+**Explanation:** We does not see significant changes in Trump's support in those states.
+
+-   We calculated here the proportion of death people and cases in each State's population.
+-   We calculated new variable called `damage` that equals to 10\*`death_prop` + `cases_prop`.
+
+```{r results_of_covid_calculatin, message=F, warning=FALSE}
+results_of_covid <- population %>%
+  left_join(sum_cases_deaths) %>%
+  mutate(death_prop = sum_deaths/population,
+         cases_prop = sum_cases/population,
+         damage = 10*death_prop + cases_prop) 
+results_of_covid 
+```
+
+### Plot 11:
+
+-   This plot is an attempt to answer our research question.
+
+-   We have found the 7 states that suffered the biggest `damage` and the 7 states that suffered the most little `damage`.
+
+-   for those countries we have calculated the same plots as **plot 10** .
+
+```{r biggest_damage_plot, message=FALSE, warning=F}
+hard_covid_states <- results_of_covid %>% 
+  arrange(desc(damage)) %>%
+  head(7) %>%
+  select(short_name)
+easy_covid_states <- results_of_covid %>% 
+  arrange(damage) %>%
+  head(7) %>%
+  select(short_name)
+
+ggplot(data = hard_covid_states %>%
+  left_join(unite_elections, by = "short_name") %>%
+  pivot_longer(c("prop2020", "prop2016"), names_to = "elections_year", values_to = "trump_ornot_p") %>%
+  mutate(elections_year = if_else(elections_year=="prop2020", "2020", "2016")) %>%
+    left_join(countries), mapping = aes(x = factor(full_name), y = trump_ornot_p, fill = candidate))  + 
+  geom_bar(stat = "identity", position = "dodge") + 
+  facet_wrap(~ factor(elections_year)) + 
+  coord_flip() + 
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 6)) + 
+  scale_fill_manual(values = c("blue", "red")) + 
+  theme_minimal() + 
+  labs(title = "The votes for Trump or others Separated by 2016 and 2020",
+       subtitle = "Among the 7 states with the biggest damage",
+       x = "State",
+       y = "Percentage"
+    
+  )
+#ggsave("The votes for Trump or others among states with biggest damage.png")
+```
+
+```{r lowest_damage_plot, message=F, warning=FALSE}
+ggplot(data = easy_covid_states %>%
+  left_join(unite_elections, by = "short_name") %>%
+  pivot_longer(c("prop2020", "prop2016"), names_to = "elections_year", values_to = "trump_ornot_p") %>%
+  mutate(elections_year = if_else(elections_year=="prop2020", "2020", "2016")) %>%
+    left_join(countries), mapping = aes(x = factor(full_name), y = trump_ornot_p, fill = candidate))  + 
+  geom_bar(stat = "identity", position = "dodge") + 
+  facet_wrap(~ factor(elections_year)) + 
+  coord_flip() + 
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 6)) + 
+  scale_fill_manual(values = c("blue", "red"))+ 
+  theme_minimal() + 
+  labs(title = "The votes for Trump or others Separated by 2016 and 2020",
+       subtitle = "Among the 7 states with the lowest damage",
+       x = "State",
+       y = "Percentage"
+    
+  )
+#ggsave("The votes for Trump or others among states with lowest damage.png")
+
+```
+
+[**Explanation:**]{.ul}
+
+-   some surprising results can be seen. The states that have suffered from covid the most supported more significantly in Trump.
+
+-   The states with Significantly lesser damage have supported in the other candidates.
+
+-   Maybe we will see here the result like section 1 of this question, and the conclusion will be that The support in Trump can not explain The corona cases and deaths.
+
+### The Second Model:
+
+-   First we combined `results_of_covid` and `unite_elections` to one data-set.
+
+```{r unite_results, message=FALSE, warning=FALSE}
+(unite_results <- unite_elections %>%
+  left_join(results_of_covid) %>%
+    filter(candidate=="Trump") )
+  
+```
+
+-   The explanatory variable is the difference of support percentage in Trump from 2016 to 2020 in each state.
+
+-   The response variable is the proportion of deaths in the population of each country.
+
+```{r second_nodel1, message=F, warning=F}
+ggplot(unite_results, aes(x = change_2016_to_2020, y = death_prop)) + 
+  geom_point() +  
+  geom_jitter() + 
+  geom_smooth(method = "lm")  + 
+  labs(x = "Difference (Persentage)",
+       y = "Death Proportion",
+       title = "How does the Difference of Trump's public support explain the death prop.",
+       subtitle = "Between the elections that have Occurred in 2016 and 2020")
+#ggsave("How does the Difference of Trump's public support explain the death.png")
+
+```
+
+**Explanation:**
+
+-   It seems like the explanatory variable `change_2016_to_2020` does not explain the response variable `death_prop`.
+
+-   In the first impression the points seems to have a random behavior.
+
+```{r log_model_2, warning=FALSE, message=FALSE}
+ggplot(unite_results, aes(x = change_2016_to_2020, y = log(death_prop))) + 
+  geom_point() +  
+  geom_jitter() + 
+  geom_smooth(method = "lm")  + 
+  labs(
+    x = "Difference (Persentage)",
+       y = "log(death Proportion)",
+       title = "How does the Difference of Trump's public support explain the log prop.",
+       subtitle = "Between the elections that have Occurred in 2016 and 2020")
+#ggsave("How does the Difference of Trump's public support explain the log prop.png")
+ 
+```
+
+[**Explanation:**]{.ul} We can see that the Log scale doesn't help to see any new behavior.
+
+```{r res2, message=F, warning=F}
+ggplot(unite_results, aes(x = change_2016_to_2020, y = damage)) + 
+  geom_point() +  
+  geom_jitter() + 
+  geom_smooth(method = "lm")  + 
+  labs(
+    x = "Difference (Persentage)",
+       y = "Damage",
+       title = "How does the Difference of Trump's public support explain the Damage",
+       subtitle = "Between the elections that have Occurred in 2016 and 2020")
+#ggsave("How does the Difference of Trump's public support explain the Damage.png")
+```
+
+[**Explanation:**]{.ul} Relatively similar results are obtained with `damage` as the response variable.
+
+Let's look at the residuals:
+
+```{r linear_model_2}
+
+elections_deaths_fit <- linear_reg() %>%
+  set_engine("lm") %>%
+  fit(death_prop ~ change_2016_to_2020, data = unite_results)
+elections_deaths_fit_aug <- augment(elections_deaths_fit$fit)
+
+ggplot(elections_deaths_fit_aug, mapping = aes(x = .fitted, y = .resid)) +
+  geom_point(alpha = 0.5) +
+  geom_hline(yintercept = 0, color = "gray", lty = "dashed") +
+  labs(x = "Predicted Death Proportion", y = "Residuals")
+#ggsave("Residuals model 2.png")
+
+```
+
+same on the damage variable as response variable:
+
+```{r residuals_with_damage}
+elections_damage_fit <- linear_reg() %>%
+  set_engine("lm") %>%
+  fit(damage ~ change_2016_to_2020, data = unite_results)
+elections_damage_fit_aug <- augment(elections_deaths_fit$fit)
+
+ggplot(elections_damage_fit_aug, mapping = aes(x = .fitted, y = .resid)) +
+  geom_point(alpha = 0.5) +
+  geom_hline(yintercept = 0, color = "gray", lty = "dashed") +
+  labs(x = "Predicted Damage", y = "Residuals")
+#ggsave("danmage residuals model 2.png")
+```
+
+-   Residuals distributed nearly randomly around 0.
+
+-   With no visible pattern along the x or y axes.
+
+-   the problem is not the model selection.
+
+-   So probably the changes in Donald Trump's support in between 2016 and 2020 elections can't explain corona's cases and deaths.
+
+-   let's calculated R Squared and pearson correlation:
+
+```{r R_sq_correlation_model_2}
+R_sq<- glance(elections_deaths_fit)$r.squared
+cor <- cor(unite_results$change_2016_to_2020, unite_results$death_prop, 
+                    method = "pearson")
+c("R Squared" = R_sq, "Correlation" = cor)
+```
+
+-   R squared is the percentage of variability in the response variable explained by the regression model.
+-   In this model the R squared and correlation are better than the last model, but still those values are low. The model does not explain most of the variability in the response variable.
+-   the feature and the response variable are not correlated.
+-   After seeing the results of the two model: our conclusion is that the explanatory variables we chose can't explain corona's cases and deaths.
+-    So we would carefully define that the changes in US public support (separated by countries) in Donald Trump don't explain the extent of the damage from covid-19 (that those countries have experienced).

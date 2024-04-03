@@ -1,0 +1,1243 @@
+---
+title: "Question 2"
+author: "Amir Zehavi, Adam Uziel and Itay Asraf"
+date: "6/5/2021"
+output: html_document
+id_Adam: "323817379"
+id_itay: "322601907"
+id_amir: "206655839"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message=FALSE, warning=F}
+#install.packages("hexbin")
+library(tidyverse)
+library(tidymodels)
+library(tidytext)
+library(lubridate)
+library(here)
+library(scales)
+library(glue)
+library(textrecipes)
+library(gridExtra)
+library(ggpubr)
+library(hexbin)
+```
+
+importing the data
+
+```{r, warning=FALSE, error=FALSE,message=FALSE}
+trump_tweets <- read_rds(here::here("data", "trump.rds"))
+civiqs_polls <- read_csv(here::here("data", "civiqs_poll.csv"))
+```
+
+## Exploring corona concern poll data
+
+```{r}
+glimpse(civiqs_polls)
+```
+
+### Civiq Poll Data Types
+
+date -
+
+Data type: factor (unordered - see next code chunk)
+
+Represents the date each poll was conducted
+
+dem, rep -
+
+Data Type: integer
+
+Represent the net number of people concerned about the coronavirus by party. (net number concerned = people concerned - people not concerned)
+
+diff -
+
+Data Type: integer
+
+Represents the magnitude of the difference between the concern of republicans and democrats (diff = \|dem - rep\|)
+
+#### Civiq distribution
+
+```{r}
+# Getting an idea of the variable distributions
+summary(civiqs_polls)
+```
+
+## First impressions of the data
+
+We can see that democrats are much more concerned than republicans about covid. In fact, in the poll where republicans are most worried about covid, they are still less worried about it than democrats were when they were least worried!
+
+High diff values tell us that republicans and democrats were significantly at odds with respect to covid worry throughout the data set.
+
+Note that date is unordered
+
+# Exploring trump's tweets
+
+```{r}
+glimpse(trump_tweets)
+```
+
+### Data Types
+
+date - Data Type: datetime Represents the date of each tweet
+
+favorites - Data Type: character The number of favorites of each tweet. It is 0 if the tweet is retweeted
+
+id - Data Type: character The tweet's id
+
+isRetweet - Data Type: logical True if the tweet is a retweet
+
+retweets - Data Type: character The number of retweets the tweet got
+
+text - Data type: character Represents the text of the tweet
+
+### A look at the distribution
+
+```{r}
+# we chose to use head here - summary isnt useful for character variables
+head(trump_tweets)
+```
+
+### First impressions
+
+We can see that for all of the retweets, the number of favorites is zero, and the tweet begins with RT \@(originaltweeter)
+
+```{r, message=F, warning=F}
+civiqs_polls<-civiqs_polls%>%
+  rename(Date=date)
+
+#change the format of the date.
+civiqs_polls$Date<-as.Date(civiqs_polls$Date, format =  "%m/%d/%Y")
+
+```
+
+```{r}
+trump_tweets$date <- ymd_hms(trump_tweets$date)
+trump_tweets <- trump_tweets %>%
+  rename(date_hour = date) %>%
+  mutate(date = as.Date(date_hour),
+         favorites = as.integer(favorites), 
+         retweets = as.integer(retweets)) 
+
+glimpse(trump_tweets)
+```
+
+At the first part, we saw that it was more difficult to convince the republicans that the pandemic was dangerous. Because of that we want to check how the republicans' mood changes after tweets.
+
+```{r mood and retweets}
+# number of tweets each day.
+sum_tweets<-trump_tweets %>%
+  group_by(date)%>%
+  count(date) %>%
+  rename(tweet=n)
+
+
+tweets_connection<-trump_tweets %>% 
+  group_by(date) %>% 
+  
+  #sum the retweets for each day
+  summarise(retweet = sum(retweets)) %>% 
+  
+  #join- To see how the the mood of republicans changed 
+  inner_join(civiqs_polls,by=c('date' = 'Date')) %>% 
+  inner_join(sum_tweets,by='date')%>%
+  pivot_longer(cols=c(tweet,retweet),
+                names_to="Retweet_Tweet",
+                values_to ="num_tweets")%>% 
+  select(rep,Retweet_Tweet,num_tweets)
+
+ggplot(tweets_connection,aes(num_tweets,rep,color=factor(Retweet_Tweet)))+
+
+  geom_point(stat='identity')+
+  
+  theme(plot.title = element_text(hjust = 0.5)) + 
+
+  labs(title="How Does Republicans' Mood Change After Tweets/Retweets? ",
+       x='Amount Of Tweets',
+       y='Concern',
+       
+       color='Retweet Or Tweet')+
+  # correspond the colors to the diff
+  scale_color_manual(values = c("red","blue"))+
+  facet_wrap(~Retweet_Tweet,scales="free_x")
+#ggsave("Republican mood after Retweets.png")
+```
+
+[**Explanation:**]{.ul} It's hard to say, if the amount of tweets or retweets affect on the concern of Republicans, but as general,the more tweets/retweets, the Republicans more concerned.
+
+This is nice information, **but it doesn't tell us how the covid data affects Republicans. Maybe subject like elections,politics cause their concern.**
+
+As a result, we will check at first the average amount of covid retweets, and the average of no covid retweets.
+
+```{r covid tweets}
+#number of covid tweets and no covid tweets.
+count_tweets_covid<- trump_tweets %>%
+  filter(str_detect(text, 'COVID-19|Covid-19|Covid-19|covid|coronavirus|COVID 19|covid 19')) %>%
+  distinct(id)%>%
+  count(id)%>%
+  summarise(sum=sum(n))
+
+count_tweets_not_covid<- trump_tweets %>%
+  filter(!str_detect(text, 'COVID-19|Covid-19|Covid-19|covid|coronavirus|COVID 19|covid 19')) %>%
+  distinct(id)%>%
+  count(id)%>%
+  summarise(sum=sum(n))
+
+print(paste("The Number Of Covid tweets is:",count_tweets_covid))
+print(paste("The Number Of Not Covid tweets is:",count_tweets_not_covid))
+```
+
+```{r covid retweets}
+
+#The average of Covid and No covid retweets
+tweet_text<-trump_tweets %>%
+  filter(str_detect(text, 'COVID-19|Covid-19|Covid-19|covid|coronavirus|COVID 19|covid 19|COVID19|COVID|COVID_19'))%>%
+  distinct(id,retweets)%>%
+  summarise(mean(retweets))
+
+tweet_text2<-trump_tweets %>%
+  filter(!str_detect(text, 'COVID-19|Covid-19|Covid-19|covid|coronavirus|COVID 19|covid 19|COVID19|COVID|COVID_19')) %>%
+   distinct(id,retweets)%>%
+  summarise(mean(retweets))
+
+
+print(paste("The Avg Of Covid Retweets is:",tweet_text))
+print(paste("The Avg Of Not Covid Retweets is:",tweet_text2))
+
+```
+
+[**Explanation:**]{.ul} The average of retweets of no covid tweets is 2 times larger than retweets of covid tweets, but it is because there are many more tweets of no covid!
+
+**The interest in the subject of the corona in people is very large and with a very small number of tweets !**
+
+How the Republicans' concern after a day with covid tweets?
+
+```{r Concern and covid tweets, message=F, warning=F}
+pivot_data<- read_rds(here::here("data", "pivot_data.rds"))
+diff_previous<-pivot_data%>%
+  filter(rep_or_dem=='rep')%>%
+   mutate(diff = Current_Mood-lag(Current_Mood))%>%
+  na.omit()%>%
+  select(Date,diff)
+
+diff_previous$Date<-as.Date(diff_previous$Date)
+
+#how the covid tweets affect on the rep concern day by day
+covid_diff<-trump_tweets %>%
+    inner_join(diff_previous,by=c('date' = 'Date')) %>%
+  filter(str_detect(text, 'COVID-19|Covid-19|Covid-19|covid|coronavirus|COVID   19|covid 19|#COVID19'))%>%
+  distinct(date,diff) %>%
+  select(diff,date)
+
+#how the no covid tweets affect on the rep concern day by day
+notcovid_diff<-trump_tweets %>%
+    inner_join(diff_previous,by=c('date' = 'Date')) %>%
+  filter(!str_detect(text, 'COVID-19|Covid-19|Covid-19|covid|coronavirus|COVID 19|covid 19|virus'))%>%
+  distinct(date,diff) %>%
+  select(diff,date)
+
+
+#Checking the common dates in days with covid tweets and dayws without covid tweets. If the day with covid, so he will belong to covid_diff,else: to notcovid_diff
+
+common <- intersect(covid_diff$date, notcovid_diff$date)  
+
+notcovid_diff<-notcovid_diff %>%
+  filter(!(date %in% common))
+  
+
+#covid tweets graph
+covid_retweet_graph<-ggplot(covid_diff,aes(diff,fill=factor(diff)))+
+
+  geom_histogram(position='dodge',alpha=0.7) +
+
+                 stat_count()+
+
+  labs(title="Will We See More Concern After Covid Tweets?",
+       x='Difference',
+       y='No.Covid Tweets',
+       fill='diff')+
+  scale_fill_manual(values = c("red","blue","cyan","black","green","purple"))
+
+
+#not covid tweets graph
+notcovid_retweet_graph<-ggplot(notcovid_diff,aes(diff,fill=factor(diff)))+
+
+ geom_histogram(position='dodge',alpha=0.7) +
+
+                 stat_count()+
+
+  labs(title="Will We See Less Concern After No Covid Tweets?",
+       x='Difference',
+       y='No. No Covid Tweets',
+       fill='diff')+
+
+    scale_fill_manual(values = c("red","blue","cyan","black","green","purple"))
+
+grid.arrange(covid_retweet_graph,notcovid_retweet_graph,ncol=1)
+#ggsave("Covid tweets and concern.png")
+```
+
+[**Explanation:**]{.ul} We can see that after days with covid tweets there are more concern than days without covid tweets. Talking about the virus causes more concern, more afraid .
+
+Because the results, we think that from the tweets that doesn't talk about covid, the main reason is the election to president. We will check this:
+
+```{r election_tweets, warning=F, message=FALSE}
+
+diff_previous<-pivot_data%>%
+  filter(rep_or_dem=='rep')%>%
+   mutate(diff = Current_Mood-lag(Current_Mood))%>%
+  na.omit()%>%
+  select(Date,diff)
+
+diff_previous$Date<-as.Date(diff_previous$Date)
+
+notcovid_diff2<-trump_tweets %>%
+  filter(!str_detect(text, 'COVID-19|Covid-19|Covid-19|covid|coronavirus|COVID 19|covid 19|virus'))%>%
+  distinct(date,text) %>%
+  filter(!(date %in% common))
+
+
+#Checking the common dates in days with covid tweets and dayws without covid tweets. If the day with covid, so he will belong to covid_diff,else: to notcovid_diff
+
+
+#split the text to word at each day
+tr<-notcovid_diff2 %>%
+  separate_rows(text, sep = ' ') %>%
+  filter(str_detect(text, "^elect*|^vote*"))%>%
+  select(text,date)%>%
+  inner_join(diff_previous,by=c('date'='Date')) %>%
+  distinct(date,diff) 
+
+ggplot(tr,aes(diff,fill=factor(diff)))+
+
+ geom_histogram(position='dodge',alpha=0.7) +
+                 stat_count()+
+
+  labs(title="Will We See More Concern After Elections Tweets?",
+       x='difference',
+       y='No. Election Tweets',
+       fill='diff')+
+
+    scale_fill_manual(values = c("red","blue","cyan","black","green","purple"))
+#ggsave("Concern after elections tweets.png")
+```
+
+[**Explanation:**]{.ul} We can see that the election tweets causes to some extent more concern, and this is in relation to tweets that do not deal with the virus
+
+```{r}
+
+trump_tweets <- trump_tweets %>%
+  mutate(
+    wday = wday(date),
+    weekend = if_else(wday %in% c(6, 7), "Weekend", "Weekday"),
+    day_part = if_else(hour(date_hour) %in% seq(0,11), "AM", "PM")
+  ) %>%
+  # count words
+  rowwise() %>%
+  mutate(n_words = text %>% str_count("\\w+") %>% sum()) %>%
+  ungroup()
+trump_tweets %>% head(10)
+```
+
+```{r n_words distribution,message=FALSE}
+
+ggplot(trump_tweets, aes(x = n_words)) +
+  geom_density(color = "blue") +
+  labs(
+    title = "Distribution of number of words",
+    subtitle = "of Donald Trump's Tweets",
+    x = "Number of words",
+    y = "Density"
+  ) +
+  theme_minimal() + 
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 8))
+# ggsave("Words_per_tweet_dist.png")
+```
+
+```{r word distribution by day}
+trump_tweets_sum_words <- trump_tweets %>%
+         group_by(date, weekend) %>%
+         summarise(words_per_date = sum(n_words, na.rm = T), .groups = "drop")
+ggplot(trump_tweets_sum_words, aes(x = words_per_date)) +
+  geom_density(color = "blue") +
+  labs(
+    title = "Distribution the of sum of number of words",
+    subtitle = "of Donald Trump's Tweets per day",
+    x = "Number of words",
+    y = "Density"
+  ) +
+  theme_minimal() + 
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 8))
+# ggsave("Words_per_day_dist.png")
+```
+
+We can see that most days trump tweets between about 100 and 1200 words, with a minority of tweets dragging on past that.
+
+Lets check the relationship between number of words, favorites and retweets:
+
+```{r favorites_hex_plot}
+#silver #fffff0
+# nice brown #FFDB6D
+options(scipen = 1000L)
+trump_tweets %>% ggplot(aes(x = favorites, y = retweets)) +
+  geom_hex(bins = 10, color = "#FFFFF0") +
+  scale_x_continuous(labels = comma) + 
+  scale_y_continuous(labels = comma) + 
+  theme(panel.background = element_rect(fill = "#939204"),
+        panel.grid.major = element_line(linetype = "dashed"),
+        panel.grid.minor = element_line(linetype = "dotted"),
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        ) +
+  labs(x = "Favorites",
+       y = "Retweets",
+       title = "A look at tweets by Retweets and Favorites",
+       subtitle = "Variables likely to be affected by concern")
+options(scipen = 0L)
+
+```
+
+```{r weekday word distribution}
+ggplot(trump_tweets, mapping = aes(x = n_words, color = day_part)) +
+  geom_density() + 
+  facet_wrap(~ weekend) + 
+  scale_colour_manual(values = c("blue", "red"), name = "Day Part") + 
+  theme_minimal() + 
+  labs(
+    title = "Distribution of number of words",
+    subtitle = "separated by Weekend/Weekdays and part of the day",
+    x = "Number of words",
+    y= "Density"
+  )
+# ggsave("Words_by_weekend_Timeofday_dist.png")
+```
+
+Interestingly, we can see that on weekdays the distribution of tweets is the same whether it is AM or PM, while on weekends Trump mostly tweets in the mornings. Presumably, evenings and the afternoon on weekends are when he (and his followers) are with their families on the weekend.
+
+```{r word distribution}
+ggplot(data = trump_tweets, mapping = aes(x = n_words, color = factor(isRetweet)))+
+  geom_density()+
+  theme_minimal() + 
+  labs(
+    x = "Number of words",
+    y = "Density",
+    title = "Distribution of the Number of Words",
+    subtitle = "Among tweets that are retweet and Tweets that aren't",
+    color = "Is Retweet"
+  ) + 
+  scale_colour_manual(values = c("red", "blue"))
+# ggsave("Num_words_by_retweet_dist.png")
+```
+
+In this graph we can see that Retweets seem to have a limit of about 30 words, such that most of them have between 15 and 27 words. Original tweets, on the other hand, have an almost flat distribution of words.
+
+```{r unnest tweets}
+# unifies covid spellings, unnests words. Does not remove stopwords, so we will
+# be able to show the cleaning process
+trump_tweets_words <- trump_tweets %>%
+  mutate(
+    text = str_replace_all(text, "COVID-19", "COVID_19"),
+    text = str_replace_all(text, "COVID 19", "COVID_19"),
+    text = str_replace_all(text, "Covid-19", "COVID_19"),
+    text = str_replace_all(text, "Covid 19", "COVID_19"),
+    text = str_replace_all(text, "#COVID19", "COVID_19"),
+    text = str_replace_all(text, "covid 19", "COVID_19"),
+    text = str_replace_all(text, "Coronavirus", "COVID_19"),
+    text = str_replace_all(text, "coronavirus", "COVID_19")
+  ) %>%
+  unnest_tokens(word, text)
+trump_tweets_words
+```
+
+```{r bigrams, warning=F, message=F}
+# Unifies covid spellings, unnesting bigrams. Shows results
+trump_tweets_bigrams<-  trump_tweets %>%
+  mutate(
+    text = str_replace_all(text, "COVID-19", "COVID_19"),
+    text = str_replace_all(text, "COVID 19", "COVID_19"),
+    text = str_replace_all(text, "Covid-19", "COVID_19"),
+    text = str_replace_all(text, "Covid 19", "COVID_19"),
+    text = str_replace_all(text, "#COVID19", "COVID_19"),
+    text = str_replace_all(text, "covid 19", "COVID_19"),
+    text = str_replace_all(text, "Coronavirus", "COVID_19"),
+    text = str_replace_all(text, "coronavirus", "COVID_19")
+  ) %>%
+  unnest_tokens(bigram, text, token = "ngrams", n = 2) %>%
+  
+  # add index for later grouping
+  mutate(i = row_number()) %>%
+  
+  # makes 4 rows for every row above. 2 with each word.
+  unnest_tokens(word, bigram,token = "tweets", drop = FALSE) %>%  
+  
+  # takes the new word column mentioned above and gets rid of all rows with
+  # stopwords as 'words'
+  anti_join(stop_words) %>%
+  # gets rid of of rows where the 'word' col includes the following words.
+   filter(!(word %in% c("rt", "tco", "https", "RT", "tc"))) %>%
+   group_by(i) %>%  
+   filter(n() == 2) %>% 
+   summarise(bigram = unique(bigram), .groups = "drop")
+trump_tweets_bigrams
+
+```
+
+```{r trump tweet length by weekend}
+ggplot(trump_tweets_sum_words, aes(x = date, y = words_per_date, color = weekend))+
+  geom_point( alpha = 0.7) +
+  geom_smooth(aes(x = date, y = words_per_date), method = lm, formula = y ~ x, color = "darkgray") +
+  labs(
+    title = "The Length of Daily Donald Trump's Tweets",
+    subtitle = "Measured in number of words separated by weekend/weekday",
+    x = NULL, y = "Number of words", color = NULL, shape = NULL
+  ) +  
+  theme_minimal() + 
+  facet_wrap(~ weekend, nrow = 2)  + 
+  theme(legend.position = "none" 
+        )
+# ggsave("Tweet_length_by_weekday_over_time.png")
+```
+
+It doesn't look like this would be a good feature, as the number of tweets seems to rise similarly whether its a weekday or not. Lets check this quantitatively:
+
+```{r check feature feasibility}
+# get r squared and see explicitly whether or not this is a good feature
+lm_words1 <- lm(words_per_date ~ date, data = trump_tweets_sum_words %>%
+                 filter(weekend=="Weekend"))
+glance(lm_words1)$r.squared
+
+lm_words2 <- lm(words_per_date ~ date, data = trump_tweets_sum_words %>%
+                 filter(weekend=="Weekday"))
+glance(lm_words2)$r.squared
+
+```
+
+```{r uncleaned word frequency}
+trump_tweets_words %>%
+  count(word, sort = TRUE) %>%
+  unique() %>%
+  head(20) %>%
+  ggplot(aes(y = fct_reorder(word, n), x = n)) +
+  geom_bar(stat = "identity", fill = "green", color="lightblue") +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 8))+
+  theme_classic() + 
+  ggtitle("Word frequency") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  labs(x = "Frequency",
+       y = "Word")
+# ggsave("Word frequency uncleaned.png")
+```
+
+We got a bunch of stopwords and artifacts from tweets. (t.co, rt) Lets clean it and see how the word frequency changes
+
+```{r,message=FALSE}
+avg_retweets <- trump_tweets %>%
+  group_by(date, isRetweet, .groups = 'drop') %>%
+  summarize(retweets = mean(retweets))
+
+# key labels
+avg_retweets$faclabs <- factor(avg_retweets$isRetweet, 
+                               labels = c('Original Tweet', 'Retweet'))
+avg_retweets%>% ggplot(aes(x = date, y = retweets, group= isRetweet, color=faclabs)) +
+  geom_line() +
+  ggtitle("Average Retweets per day") +
+  theme_classic2() +
+  scale_x_date(breaks = scales::pretty_breaks(n = 8))+
+  scale_y_continuous(labels = comma) +
+  theme(
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        legend.title = element_blank()) +
+  labs(subtitle = "By whether it was a retweet or not",
+       y = "Retweets", x = "",
+       color = "")
+  
+#ggsave("Average Retweets Per Day by isRetweet.png")
+```
+
+```{r, warning=FALSE, message=FALSE}
+# gets of basic stopwords and tweet stopwords in the df with unnested words
+trump_tweets_words <- trump_tweets_words %>%
+  anti_join(stop_words) %>%
+  filter(!(word %in% c("rt", "tco", "https", "RT", "tc", "t.co", "amp")))
+
+```
+
+```{r word frequency}
+trump_tweets_words %>%
+  count(word, sort = TRUE) %>%
+  unique() %>%
+  filter(n > 45) %>%
+ggplot(aes(y = fct_reorder(word, n), x = n)) +
+  geom_bar(stat = "identity", fill = "green") + 
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 8))+
+  labs(
+    title = "Frequency of words in Trump's Tweets",
+    subtitle = "After getting rid of some link words",
+    y = NULL, x = NULL) + 
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5))
+#ggsave("Word frequency.png")
+```
+
+After cleaning we can see that the most frequent words completely changed. Now we can see the contents of trunp's tweets. You can see that he tweets often about covid, himself, jobs and workers (things important to his base) and his political enemies.
+
+### Add sentiments function
+
+```{r sentiment func}
+add_sentiments <- function(df, with_capitals = FALSE) {
+  basic_sentiments <- get_sentiments("bing")
+  discrete_sentiments <- get_sentiments("nrc")
+  
+  # If capitals should be added
+  if(with_capitals){
+    cap_basic_sentiments <- basic_sentiments %>%
+      mutate(word = firstup(word))
+    
+    cap_disc_sentiments <- discrete_sentiments %>%
+      mutate(word = firstup(word))
+    
+    basic_sentiments <- union(basic_sentiments, cap_basic_sentiments)
+    discrete_sentiments <- union(discrete_sentiments, cap_disc_sentiments)
+  }
+
+#tweet_an - tweets we will be analyzing
+tweet_an <- df
+
+# change name of n_gram column so we can join it with get_sentiments, remove id
+#tweet_an <- tweet_an %>% 
+#  rename(word = n_grams) %>%
+#  select(!id)
+
+# dataframe with positive and negative sentiments for each word
+pos_neg_tweets <- tweet_an %>% 
+  left_join(basic_sentiments, by="word")
+
+# dataframe with discrete emotions for each word
+discrete_tweets <- tweet_an %>%
+  left_join(discrete_sentiments, by="word")
+
+sentiment_tweets <- full_join(discrete_tweets, pos_neg_tweets, by="word")
+
+# in the full join a duplicate n was created. Remove it and rename sentiment cols
+sentiment_tweets <- sentiment_tweets %>%
+  select(!n.y) %>%
+  rename(n = n.x,
+         emotion = sentiment.x,
+         positivity = sentiment.y)
+sentiment_tweets
+}
+```
+
+```{r}
+df <- trump_tweets_words %>% 
+  group_by(word) %>%
+  
+  # remember that there are copies here. We don't want copies the sentiment
+  # dataframe.
+  unique() %>%
+  count(word, sort=TRUE)
+
+sentiment_tweets <- add_sentiments(df, with_capitals = FALSE)
+sentiment_tweets %>% head(20)
+```
+
+Oh no! The dataframe has a lot of NAs! Lets clean it:
+
+```{r sentiment clean}
+sentiment_tweets <- sentiment_tweets %>%
+  mutate(emotion = case_when(word == "COVID19" | word=="#COVID19"|
+                               word=="covid_19"|word=="covid19"~ "fear",
+                             word == "Trump"|word=="trump" ~ "none",
+                             is.na(emotion) ~ "none",
+                             TRUE ~ as.character(emotion)),
+         positivity = case_when(word == "President"|word=="president" ~ "positive",
+                                word == "American"|word=="american" ~ "positive",
+                                word == "COVID19" | word=="#COVID19" ~ "negative",
+                                word == "workers" ~ "positive",
+                                # We will assume that on average, the word Trump
+                                # will be considered neutral.
+                                word == "Trump"|word=="trump" ~ "neither",
+                                emotion %in% c("positive, trust, joy, anticipation") ~ "positive",
+                                emotion %in% c("fear", 'negative', 'disgust', 'sadness',
+                                               'anger', "surprise") ~ "negative",
+                                is.na(positivity) ~ "neither",
+                                TRUE ~ as.character(positivity))) %>%
+  mutate(emotion = factor(emotion, levels = c("joy", "anticipation", "trust", 
+                                   "positive", "surprise", "none", "anger", 
+                                   "fear", "disgust", "sadness", "negative")),
+         positivity = factor(positivity, levels = c("positive", "neither", "negative")))
+
+sentiment_tweets %>% head(10)
+```
+
+Thats better!
+
+### Graphing positivity/negativity
+
+```{r Graphing sentiments,message=FALSE}
+num_to_show <- 10
+
+pos_plt <- sentiment_tweets %>% 
+  filter(positivity == "positive") %>%
+  mutate(word = fct_reorder(word, n)) %>%
+  select(!emotion) %>%
+  distinct() %>%
+  head(num_to_show) %>%
+  ggplot(aes(x = n, y = fct_reorder(word, n))) +
+  geom_col(fill = "#3CD8F7", color = "black") +
+  scale_y_discrete(position = "right") +
+  scale_x_continuous(breaks = c(50, 100),
+                     labels = c(50, 100),
+                     limits = c(0, 175)) +
+  theme_minimal() + 
+  labs(y = "", x="")
+
+neg_plt <- sentiment_tweets %>% 
+  filter(positivity == "negative") %>%
+  select(!emotion) %>%
+  distinct() %>%
+  mutate(word = fct_reorder(word, n)) %>%
+  head(num_to_show) %>%
+  ggplot(aes(x = -n, y = fct_reorder(word, n), )) +
+  geom_col(fill = "#FF3232", color="black") +
+  scale_x_continuous(breaks = c(-50, -100), 
+                     labels = c(50, 100),
+                     limits = c(-175, 0)) +
+  theme(legend.position = "None",
+        axis.text.x = element_blank()) +
+  theme_minimal() +
+  labs(y = "", x="")
+
+ggarrange(neg_plt, pos_plt, common.legend = TRUE) %>%
+  annotate_figure(top = "Word Frequencies by Positivity",
+                  bottom = "")
+#ggsave("Word Freq by positivity.png")
+```
+
+It seems like trump is tweeting very often about 'the fake virus', and that during the beginning of 2020 his tweets were much more negative than positive
+
+```{r bigram frequency}
+
+trump_tweets_bigrams %>%
+  count(bigram, sort = TRUE) %>%
+  filter(n > 15) %>%
+  ggplot(aes(x = fct_reorder(bigram ,n ), y = n, fill=TRUE)) + 
+  geom_col(color = "black") +
+  theme_classic() +
+  ggtitle("Frequency of the twelve highest words") +
+  theme(axis.title.x.bottom = element_blank(),
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+        plot.title = element_text(hjust = 0.5),
+        legend.position = "None") +
+  scale_fill_brewer() +
+  labs(y = "Frequency")
+#ggsave("Bigram Frequency.png")
+```
+
+When looking at bigrams, we see that fake news, himself, the nicknames he gave to his political enemies, and various coronavirus related terms (covid19 task, covid19 response) are prevalent.
+
+```{r unpack, join civiq, message=F, warning=F}
+# import the civiq data
+civiqs_polls <- read_csv(here::here("data", "civiqs_poll.csv"))
+
+# reformat date and combine with trump_tweets_words.Then add a variable to check
+# whether or not the republicans are concerned.
+polls_words_tweets <- civiqs_polls %>%
+  separate(date, into = c("month", "day", "year"), sep = "/") %>%
+  unite(date, year, month, day, sep = "-") %>%
+  mutate(date = as.Date(date)) %>%
+  left_join(trump_tweets_words)  %>%
+  filter(!is.na(id)) %>%
+  mutate(Is_CONCERNED = if_else(rep<0, "not concerned", "concerned")) %>%
+  unique()
+polls_words_tweets %>% head(10)
+```
+
+For our analysis, we believe that the ratio between positive and negative words in a tweet could help our model predict concern
+
+```{r Adding positivity ratio}
+#Introducing the random 15 values
+polls_words_tweets%>% 
+  left_join(sentiment_tweets,by="word") %>%
+  group_by(id) %>%
+  count(positivity)%>%
+  head(15)
+```
+
+```{r, warning=FALSE, message=FALSE}
+# do the same for trump_tweets. (The original dataframe)
+polls_tweets<- civiqs_polls %>%
+  separate(date, into = c("month", "day", "year"), sep = "/") %>%
+  unite(date, year, month, day, sep = "-") %>%
+  mutate(date = as.Date(date)) %>%
+  left_join(trump_tweets)  %>%
+  filter(!is.na(id))%>%
+  mutate(Is_CONCERNED = if_else(rep<0, "not concerned", "concerned"),
+         Is_CONCERNED = as.factor(Is_CONCERNED))
+polls_tweets %>% head(10)
+```
+
+```{r Concern Ratio}
+# plot Is_Concerned ratio of true and false
+polls_tweets %>%
+  unique() %>%
+  ggplot(aes(x = Is_CONCERNED, fill = Is_CONCERNED)) + 
+  geom_bar(color = "black") + 
+  scale_fill_manual(values = c("blue", "red")) + 
+  labs(
+    y = "Frequency"
+  ) +  
+  theme_classic() +
+  theme(axis.title.y = element_blank() , 
+        legend.position = "none") + 
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 8)) + 
+  coord_flip() 
+
+# Calculate it.
+concerned <- polls_tweets %>%
+  unique() %>%
+  count(Is_CONCERNED)
+
+# percent of tweets where republicans are concerned
+concern_ratio <- concerned$n[1]/(concerned$n[2] + concerned$n[1])
+concern_ratio
+#ggsave("Concern Ratio.png")
+```
+
+Since republicans were more likely to be not concerned in the data, we calculated the probabililty that a random tweet will have republicans concerned. Our model will have to be more sure than 50% that a tweet is concerning in order to classify it as such.
+
+Now lets calculate a similar ratio for every tweet to use as a feature
+
+```{r Tweet Positivity Ratios}
+# Calculate Tweet Positivity and Negativity
+tweet_sent_count <- polls_words_tweets %>%
+  left_join(sentiment_tweets, by="word") %>%
+  group_by(id) %>%
+  count(positivity, .drop = FALSE) %>% 
+  pivot_wider(id_cols = id, names_from = positivity, values_from = n) %>%
+  
+  # create the ratio: pos or neg words/total words
+  mutate(pos_ratio = positive/(positive + neither + negative),
+         neg_ratio = negative/(positive + neither + negative))
+tweet_sent_count %>% head(5)
+
+```
+
+We can see that the majority of our words are classified as neither. In the beginning we wanted to use a ratio of positivity to negativity, but because of this we normalized positivity and relativity by the number of words per tweet.
+
+Glancing at TFIDF. We will use this with step_tfidf in a recipe
+
+```{r TFIDF glance}
+# Calculate tfidf
+tweet_tf_idf <- polls_words_tweets %>%
+  count(Is_CONCERNED, word, sort = TRUE) %>% # count 
+  group_by(Is_CONCERNED) %>%
+  mutate(total = sum(n)) %>%
+  bind_tf_idf(word, Is_CONCERNED, n)
+
+# Before using it in a recipe, lets look at tfidf to get a sense of what it is
+tweet_tf_idf %>%
+  select(-total) %>%
+  arrange(desc(tf_idf)) %>%
+  head(10)
+```
+
+We can see that the important tfidf words are not necessarily the ones mentioned often. They are the ones that identify specific tweets, as expected
+
+```{r final prep for analysis}
+polls_tweets_more_tidy<- polls_tweets %>%
+  mutate(
+    text = str_replace_all(text, "COVID-19", "COVID_19"),
+    text = str_replace_all(text, "COVID 19", "COVID_19"),
+    text = str_replace_all(text, "Covid-19", "COVID_19"),
+    text = str_replace_all(text, "Covid 19", "COVID_19"),
+    text = str_replace_all(text, "#COVID19", "COVID_19"),
+    text = str_replace_all(text, "covid 19", "COVID_19"),
+    text = str_replace_all(text, "Coronavirus", "COVID_19"),
+    text = str_replace_all(text, "coronavirus", "COVID_19"),
+    text = str_remove_all(text, "https"),
+    text = str_remove_all(text, "t.co"),
+    text = str_remove_all(text, "rt"),
+    text = str_remove_all(text, "RT"),
+    text = str_remove_all(text, "tco"),
+    text = str_remove_all(text, "tc")
+  ) %>%
+  unique() %>%
+  
+  # add sentiment analysis to final data
+  left_join(tweet_sent_count, by="id") %>%
+  
+  # select only columns needed for analysis
+  select(Is_CONCERNED, id, text, isRetweet, n_words, pos_ratio, neg_ratio, wday, n_words)
+
+polls_tweets_more_tidy %>% head(5)
+```
+
+# Logistic Regression
+
+```{r split data}
+# Set a seed and split data
+set.seed(111)
+tweet_split <- initial_split(polls_tweets_more_tidy, strata = Is_CONCERNED)
+tweet_train <- training(tweet_split)
+tweet_test  <- testing(tweet_split)
+```
+
+Inititalize logistic regression
+
+```{r init regression}
+lasso_mod <- logistic_reg(penalty = 0.005, mixture = 1) %>%
+  set_engine("glmnet")
+```
+
+Create the recipe. We will pick whether or not the tweet is a retweet, the number of words, the day of the week and the tfidf of the words as features. Note that picking the tweet as a feature can let the model memorize which tweets happened while republicans were concerned or not - which it can't know if we were to use this model for prediction.
+
+We tried a number of different parameters and this one turned out best. The resulting ROC curves and data are in the files.
+
+```{r Create Recipe}
+# Create a recipe for analysis
+
+# Our features will be: the day of the week, the number of words,
+# (if trumps base is concerned, the length of his tweets will probably change)
+# the proportion of positive and negative words, and whether or not the tweet is
+# a Retweet.
+tweet_rec <- recipe(Is_CONCERNED ~ text + isRetweet + wday + n_words +
+                      pos_ratio + neg_ratio, data = tweet_train) %>%
+  
+  # tokenize into words
+  step_tokenize(text, token = "words") %>%
+  
+  # get rid of stopwords
+  step_stopwords(text) %>%
+  
+  # stem tokens (will tweet meanings be clearer if we only take words' 'roots'?)
+  #step_stem(text) %>%
+  
+  # make bigrams
+  step_ngram(text, num_tokens = 2, min_num_tokens = 1) %>%
+  
+  # keep the 600 most frequent words
+  step_tokenfilter(text, max_tokens = 600) %>%
+  
+  # calculate tf-idf to use for text identification
+  step_tfidf(text)
+
+```
+
+Creating Workflow
+
+```{r workflow}
+# create workflow
+tweet_wflow <- workflow() %>%
+  add_model(lasso_mod) %>%
+  add_recipe(tweet_rec)
+```
+
+Setting seed, vfolds
+
+```{r set folds}
+set.seed(111)
+tweet_folds <- vfold_cv(tweet_train, v = 10, strata = Is_CONCERNED)
+#write_rds(tweet_folds, here::here("data", "tweet_folds.rds"), compress = "bz2")
+```
+
+#### fit logistic regression
+
+```{r fit and save regression}
+# The file name indicates the variables added: RT- isRetweet, WD -wwekday, N -
+# num of words, PR/NR - pos/neg ratios
+file_name <- "fit_T_RT_WD_N_PR_NR_tfidf.rds"
+# tweet_fit_rs <- tweet_wflow %>%
+#   fit_resamples(
+#     resamples = tweet_folds,
+#     control = control_resamples(save_pred = TRUE)
+#   )
+
+#write_rds(tweet_fit_rs, here::here("DifferentModelsData", file_name), compress = "xz")
+
+tweet_fit_rs <- read_rds(here::here("DifferentModelsData", file_name))
+
+# collect metrics and predictions
+tweet_train_metrics <- collect_metrics(tweet_fit_rs)
+tweet_train_pred <- collect_predictions(tweet_fit_rs)
+tweet_train_metrics_not_sum <- collect_metrics(tweet_fit_rs, summarize = F)
+tweet_train_metrics 
+tweet_train_metrics_not_sum %>% head(10)
+```
+
+```{r folds ROC}
+tweet_train_pred %>%
+  group_by(id) %>%
+  roc_curve(truth = Is_CONCERNED, .pred_concerned) %>%
+  autoplot() +
+  labs(
+    title = "ROC curve for Republican concern",
+    subtitle = "Each resample fold is shown in a different color"
+  )
+```
+
+Every fold except fold 9 and 7 are above the line at all times, so our model is probably going to preform well.
+
+```{r fit test}
+tweet_fit <- tweet_wflow %>%
+  fit(data = tweet_train)
+
+tweet_test_pred <- predict(tweet_fit, new_data = tweet_test, type = "prob") %>%
+  bind_cols(tweet_test %>% select(Is_CONCERNED, text, isRetweet, wday,n_words,
+                                  pos_ratio, neg_ratio))
+
+# Rsquared and Root mean squared error
+numerical_pred <- tweet_test_pred %>% mutate(Is_CONCERNED = ifelse(Is_CONCERNED == "concerned", 0, 1))
+rmse(numerical_pred, truth=Is_CONCERNED, estimate =.pred_concerned)
+rsq(numerical_pred, truth=Is_CONCERNED, estimate=.pred_concerned)
+```
+
+If we check the Root mean squared error and R squared, we can see that the error is large (remembering that our data is between the values of zero and one) and theR squared is small. These are not good signs for the predictive power of the model, as they indicate that the prediction is not a linear fit for the data. (and the model explains only about 10% of the variance in concern)
+
+We will check Pearson's R
+
+```{r Pearsons R}
+# Pearson's R
+cor.test(numerical_pred$.pred_concerned,numerical_pred$Is_CONCERNED, method="pearson")
+```
+
+There is a negative correlation between the predicted value and the actual value for concerned republicans. On the surface of things, this means that as our model becomes more sure that the rupublicans are concerned, the amount of times that they actually are concerned decreases. This does not bode well for our model, however republican concern and our prediction of it are not linear phenomena. This raises the possibility that Pearsons correlation tells us less about the models performance than can be naively assumed, and performance may be different than what we would infer based on Pearson alone.
+
+Note about linear models measurements and accuracy: It is worth mentioning that the fact that there were significantly more non- concerned tweets than concerned tweets could affect the above measurements. The model's accuracy won't necessarily be measured by its closeness to the above metrics. For examplel, if it correctly classifies the tweet, just barely, and gives it a probability of 0.37 of being concerned, that will make RMSE large and R squared small, even though the model correctly classifies the phenomena.
+
+Finally, lets see how the model holds up
+
+```{r test ROC}
+tweet_test_pred %>%
+  roc_curve(truth = Is_CONCERNED, .pred_concerned) %>%
+  autoplot()
+#ggsave(str_c(file_name, ".png"))
+```
+
+The model seems to have succeeded in classifying republican concern by retweet. This is partially due to our decision to use a logistic regression model - a binary classification of concern is much easier to do than a numerical prediction. We included many variables in our analysis, although it is worth mentioning that the inclusion of text as a variable may have overfit the data, as the model may be able to "memorize" for which text the concern was high and for which text it was low.
+
+```{r roc_auc}
+tweet_test_pred %>%
+  roc_auc(truth = Is_CONCERNED, .pred_concerned)
+```
+
+```{r look at predictions}
+# lets take a look at the model's results
+tweet_test_pred %>% 
+  filter(Is_CONCERNED == "concerned", `.pred_not concerned` > concern_ratio) %>%
+  head(15)
+```
+
+## Tune:
+
+```{r}
+lasso_mod_tune <- logistic_reg(penalty = tune(), mixture = 1) %>%
+  set_engine("glmnet") %>% 
+  set_mode("classification")
+```
+
+We will use the same recipe we used in the original model.
+
+```{r tuning recipe}
+tweet_rec_tune <- recipe(Is_CONCERNED ~ text + isRetweet + wday + n_words +
+                      pos_ratio + neg_ratio, data = tweet_train) %>%
+  # tokenize
+  step_tokenize(text, token = "words") %>%
+  
+  # stopwords
+  step_stopwords(text) %>%
+  
+  # make bigrams
+  step_ngram(text, num_tokens = 2, min_num_tokens = 1) %>%
+  
+  # keep the 600 most frequent words
+  step_tokenfilter(text, max_tokens = tune(), min_times = 5) %>%
+  
+  # calculate tf-idf to use for text identification
+  step_tfidf(text)
+
+```
+
+```{r tuning workflow}
+tweet_wflow_tune <- workflow() %>%
+  add_model(lasso_mod_tune) %>%
+  add_recipe(tweet_rec_tune)
+
+```
+
+```{r tuning param grid}
+param_grid <- grid_regular(
+  penalty(range = c(-4, 0)),
+  max_tokens(range = c(100, 750)),
+  levels = 5
+)
+
+```
+
+train models with all possible values of tuning parameters:
+
+```{r train models with tuning}
+# Train with tuning
+# set.seed(24)
+# tweet_fit_rs_tune <- tune_grid(
+#  tweet_wflow_tune,
+#  resamples = tweet_folds,
+#  grid = param_grid,
+#  control = control_grid(save_pred = TRUE)
+# )
+ 
+# write_rds(tweet_fit_rs_tune, here::here("data", "tweet_fit_rs_tune.rds"), compress = "xz")
+```
+
+```{r}
+# get tuned data
+tweet_fit_rs_tune <- read_rds(here::here("data", "tweet_fit_rs_tune.rds"))
+```
+
+Look at metrics
+
+```{r}
+collect_metrics(tweet_fit_rs_tune) %>% head(10)
+```
+
+Comparing retained tokens
+
+```{r}
+tokenss<-autoplot(tweet_fit_rs_tune)
+tokenss
+#ggsave("token.png",tokenss)
+```
+
+```{r}
+# show best options
+tweet_fit_rs_tune %>%
+  show_best("roc_auc")
+```
+
+```{r}
+best_roc_auc <- select_best(tweet_fit_rs_tune, "roc_auc")
+
+best_roc_auc
+```
+
+After tuning, it turns out the model performs best with a max_tokens value of 587 and a very low penalty - 0.01.
+
+```{r tuned folds}
+collect_predictions(tweet_fit_rs_tune, parameters = best_roc_auc) %>%
+  group_by(id) %>%
+  roc_curve(truth = Is_CONCERNED, .pred_concerned) %>%
+  autoplot() +
+    theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5)) +
+  labs(
+    title = "ROC curve for Covid concern Categories",
+    subtitle = "Each resample fold is shown in a different color"
+  )
+
+tweet_wflow_final <- finalize_workflow(tweet_wflow_tune, best_roc_auc)
+#ggsave("Tuned Roc by folds.png")
+
+```
+
+We can see that each of the tuned folds does considerably better than the old ones. Now we can't see any folds actually crossing the line.
+
+```{r variable importance, message=FALSE, warning=F}
+# variable importance ----------------------------------------------------------
+
+library(vip)
+
+# vi_data <- tweet_wflow_final %>%
+#  fit(tweet_train) %>%
+#  pull_workflow_fit() %>%
+#  vi(lambda = best_roc_auc$penalty) %>%
+#  mutate(Variable = str_remove_all(Variable, "tfidf_text_")) %>%
+#  filter(Importance != 0)
+ 
+# write_rds(vi_data, here::here("data", "vi_data.rds"), compress = "xz")
+```
+
+```{r most effective words}
+vi_data <- read_rds(here::here("data", "vi_data.rds"))
+
+vi_data %>%
+  mutate(
+    Importance = abs(Importance)
+  ) %>%
+  filter(Importance != 0) %>%
+  group_by(Sign) %>%
+  slice_head(n = 20) %>%
+  ungroup() %>%
+  mutate(pred_Is_CONCERNED = if_else(Sign == "POS", "concerned", "not concerned")) %>% 
+  ggplot(aes(
+    x = fct_reorder(Variable, Importance),
+    y = Importance,
+    fill = pred_Is_CONCERNED
+  )) +
+  geom_bar(stat = "identity") +
+  theme_classic2() +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_fill_manual(values = c("black", "pink")) +
+  facet_wrap(~pred_Is_CONCERNED, scales = "free") +
+  labs(
+    y = NULL
+  ) + 
+  theme(legend.position = "none") + 
+  coord_flip() + 
+  labs(
+    x = "Word",
+    y = "Importance", 
+    title = "The most effective words in the classification."
+  )
+#ggsave("Most effective words for Classifier.png")
+```
+
+A look at the most effective words for classification shows us that they are not the ones that trump tweets about the most - its the other way around. The more specific they are to a particular set of tweets, the more they help with classiiction.
+
+```{r, message=F, warning=F}
+tweet_fit_final <- last_fit(
+  tweet_wflow_final, 
+  tweet_split
+)
+
+write_rds(tweet_fit_final, here::here("data", "tweet_fit_final.rds"), compress = "xz")
+
+```
+
+Accuracy and roc_auc of the model
+
+```{r}
+tweet_fit_final <- read_rds(here::here("data", "tweet_fit_final.rds"))
+
+tweet_fit_final %>%
+  collect_metrics()
+```
+
+```{r final tuned ROC}
+# Graoh final predictions
+tweet_fit_final %>%
+  collect_predictions() %>%
+  roc_curve(truth = Is_CONCERNED, .pred_concerned) %>%
+  autoplot() +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  labs(title = "Final, tuned model ROC")
+#ggsave("Tuned model roc.png")
+```
+
+Our tuned Roc seems to have done slightly better than the original model, however the improvement by tuning seems to only have been incremental.
+
+Finally, lets take a look at our predictions:
+
+```{r predict, message=FALSE}
+# predict
+tweet_test_pred_new <- tweet_fit_final %>%
+  collect_predictions() %>%
+  bind_cols(tweet_test %>% select(Is_CONCERNED, text, isRetweet, wday,n_words,
+                                  pos_ratio, neg_ratio))
+tweet_test_pred_new %>% head(10)
+```
